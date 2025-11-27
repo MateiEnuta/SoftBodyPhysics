@@ -1,0 +1,220 @@
+fileFormatVersion: 2
+guid: 2e26d36126d6d42d0bbe3b2c43e2c6f5
+ModelImporter:
+  serializedVersion: 24200
+  internalIDToNameTable: []
+  externalObjects:
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Car_Body_Main_LOWPOLY_Car_Body_Main_LOWPOLY_Car_Body_MainMat
+    second: {fileID: 2100000, guid: a646cd59540034da1a5bfbb723291248, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Chassis_Components_Chassis_Components_Chassis_ComponentsMat
+    second: {fileID: 2100000, guid: 9a442cc7f9736449fb09a387d1551be1, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Chassis_LOWPOLY_Chassis_LOWPOLY_ChassisMat
+    second: {fileID: 2100000, guid: 34bb6a8fa8a2145a2902e8f1f37c5225, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Chrome_Parts_LOWPOLY_Chrome_Parts_LOWPOLY__Chrome_PartsMat
+    second: {fileID: 2100000, guid: e8d1c27aa9fc747c6b5bf81d11ab8a50, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Engine_Stuff_Engine_Stuff_Engine_StuffMat
+    second: {fileID: 2100000, guid: 10702848b7cf849e4923175c4f027cf0, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Glass_Objects_Glass_Objects_Glass_ObjectsMat
+    second: {fileID: 2100000, guid: 7e30682620fb3481db03a193559dc76a, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Interior_Base_LOWPOLY_Interior_Base_LOWPOLY_Interior_BaseMat
+    second: {fileID: 2100000, guid: 5124a629fa9764ddf90cebd317ae76b0, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Interior_Overall_Parts_Interior_Overall_Parts_Interior_Overall_PartsMat
+    second: {fileID: 2100000, guid: c434e677de0fb4514891b6185a5c40b1, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: License_Plate_License_Plate_License_PlateMat
+    second: {fileID: 2100000, guid: 116df76172b504c4684074ba1f4f244f, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Lights_Glass_Lights_Glass_Lights_GlassMat
+    second: {fileID: 2100000, guid: 8ec2a054f46ca4dd79c514211a006c80, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Lights_Textured_Lights_Textured_Lights_TexturedMat
+    second: {fileID: 2100000, guid: 6ce133ffd4b9648d58c323c1c441707d, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Rim_FL_Rim_RimMat
+    second: {fileID: 2100000, guid: 33ca6549b821b49958b6f575db8a2107, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Rim_FR_Rim_RimMat
+    second: {fileID: 2100000, guid: 586abdf9149e9442b983a9986a4a8e55, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Rim_RL.001_Rim_RimMat
+    second: {fileID: 2100000, guid: e7966fab4fc7c4c95a845455e7b68361, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Rim_RL_Rim_RimMat
+    second: {fileID: 2100000, guid: 1961eb3c3aa124230a69cb9381c70091, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Seats_Seats_SeatsMat
+    second: {fileID: 2100000, guid: 8c15d79cc4586499d9d63f6da3623fe3, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Springs_Springs_SpringsMat
+    second: {fileID: 2100000, guid: e3a2cb8338f0d4ad98e9e42eeb704ed1, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Tyre_FL_Tyre_Tyre_FLMat
+    second: {fileID: 2100000, guid: 485c57b2e0cea4a47829fd01bf1ac03b, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Tyre_FR_Tyre_Tyre_FLMat
+    second: {fileID: 2100000, guid: 98e76b51ebfcf4a41a7ad763e7bf290b, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Tyre_RL_Tyre_Tyre_FLMat
+    second: {fileID: 2100000, guid: ddd84871517b749d1821eefd84e547a9, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Tyre_RR_Tyre_Tyre_FLMat
+    second: {fileID: 2100000, guid: 9f45d52c71fc94383aa659573a289857, type: 2}
+  - first:
+      type: UnityEngine:Material
+      assembly: UnityEngine.CoreModule
+      name: Undecarriage_Undercarriage_UndercarriageMat
+    second: {fileID: 2100000, guid: c586bfbb9295b48db8a848e76ad55977, type: 2}
+  materials:
+    materialImportMode: 2
+    materialName: 0
+    materialSearch: 1
+    materialLocation: 1
+  animations:
+    legacyGenerateAnimations: 4
+    bakeSimulation: 0
+    resampleCurves: 1
+    optimizeGameObjects: 0
+    removeConstantScaleCurves: 0
+    motionNodeName: 
+    animationImportErrors: 
+    animationImportWarnings: 
+    animationRetargetingWarnings: 
+    animationDoRetargetingWarnings: 0
+    importAnimatedCustomProperties: 0
+    importConstraints: 0
+    animationCompression: 1
+    animationRotationError: 0.5
+    animationPositionError: 0.5
+    animationScaleError: 0.5
+    animationWrapMode: 0
+    extraExposedTransformPaths: []
+    extraUserProperties: []
+    clipAnimations: []
+    isReadable: 0
+  meshes:
+    lODScreenPercentages: []
+    globalScale: 1
+    meshCompression: 0
+    addColliders: 0
+    useSRGBMaterialColor: 1
+    sortHierarchyByName: 1
+    importPhysicalCameras: 1
+    importVisibility: 1
+    importBlendShapes: 1
+    importCameras: 1
+    importLights: 1
+    nodeNameCollisionStrategy: 1
+    fileIdsGeneration: 2
+    swapUVChannels: 0
+    generateSecondaryUV: 0
+    useFileUnits: 1
+    keepQuads: 0
+    weldVertices: 1
+    bakeAxisConversion: 0
+    preserveHierarchy: 0
+    skinWeightsMode: 0
+    maxBonesPerVertex: 4
+    minBoneWeight: 0.001
+    optimizeBones: 1
+    generateMeshLods: 0
+    meshLodGenerationFlags: 0
+    maximumMeshLod: -1
+    meshOptimizationFlags: -1
+    indexFormat: 0
+    secondaryUVAngleDistortion: 8
+    secondaryUVAreaDistortion: 15.000001
+    secondaryUVHardAngle: 88
+    secondaryUVMarginMethod: 1
+    secondaryUVMinLightmapResolution: 40
+    secondaryUVMinObjectScale: 1
+    secondaryUVPackMargin: 4
+    useFileScale: 1
+    strictVertexDataChecks: 0
+  tangentSpace:
+    normalSmoothAngle: 60
+    normalImportMode: 0
+    tangentImportMode: 3
+    normalCalculationMode: 4
+    legacyComputeAllNormalsFromSmoothingGroupsWhenMeshHasBlendShapes: 0
+    blendShapeNormalImportMode: 1
+    normalSmoothingSource: 0
+  referencedClips: []
+  importAnimation: 1
+  humanDescription:
+    serializedVersion: 3
+    human: []
+    skeleton: []
+    armTwist: 0.5
+    foreArmTwist: 0.5
+    upperLegTwist: 0.5
+    legTwist: 0.5
+    armStretch: 0.05
+    legStretch: 0.05
+    feetSpacing: 0
+    globalScale: 1
+    rootMotionBoneName: 
+    hasTranslationDoF: 0
+    hasExtraRoot: 0
+    skeletonHasParents: 1
+  lastHumanDescriptionAvatarSource: {instanceID: 0}
+  autoGenerateAvatarMappingIfUnspecified: 1
+  animationType: 2
+  humanoidOversampling: 1
+  avatarSetup: 0
+  addHumanoidExtraRootOnlyWhenUsingAvatar: 1
+  importBlendShapeDeformPercent: 1
+  remapMaterialsIfMaterialImportModeIsNone: 0
+  additionalBone: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
