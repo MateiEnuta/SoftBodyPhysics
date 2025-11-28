@@ -6,11 +6,25 @@ using UnityEngine;
 
 public class DistanceConstraint
 {
-    
+    public uint2 pidx;
+    public float restLenght;
+
+    public DistanceConstraint(uint2 pidx, float restLenght)
+    {
+        this.pidx = pidx;
+        this.restLenght = restLenght;
+    }
 }
-public class VolumeConstraints
+public class VolumeConstraint
 {
-    
+    public uint4 pidx;
+    public float restVolume;
+
+    public VolumeConstraint(uint4 pidx, float restVolume)
+    {
+        this.pidx = pidx;
+        this.restVolume = restVolume;
+    }
 }
 public class LatticeCell
 {
@@ -24,13 +38,6 @@ public class LatticeCell
         this.latticeParticles = latticeParticles;
         meshVertices = new List<uint>();
     }
-}
-
-public class vertex
-{
-    uint c0, c1, c2, c3;
-    uint c4, c5, c6, c7;
-    float3 weights;
 }
 
 public class ObjectInstanceManager : MonoBehaviour
@@ -50,6 +57,12 @@ public class ObjectInstanceManager : MonoBehaviour
     private List<float3> particles;
     private Dictionary<uint, uint> particlesDictionary;
 
+    // Constraint data
+    private HashSet<uint2> addedEdges;
+    private List<uint2>[] disLatticeGroups;
+    private List<DistanceConstraint>[] distanceConstraints;
+    private List<VolumeConstraint>[] volumeConstraints;
+
     private void Awake()
     {
         mesh = GetComponent<MeshFilter>().mesh;
@@ -63,6 +76,17 @@ public class ObjectInstanceManager : MonoBehaviour
         // Setup
         latticeDimensions = math.max(latticeDimensions, new uint3(1, 1, 1));
         particlesDimensions = latticeDimensions + new uint3(1, 1, 1);
+
+        addedEdges = new HashSet<uint2>();
+        disLatticeGroups = new List<uint2>[8];
+        distanceConstraints = new List<DistanceConstraint>[8];
+        volumeConstraints = new List<VolumeConstraint>[8];
+        for (int i = 0; i < 8; i++)
+        {
+            disLatticeGroups[i] = new List<uint2>();
+            distanceConstraints[i] = new List<DistanceConstraint>();
+            volumeConstraints[i] = new List<VolumeConstraint>();
+        }
 
 
         InitLattice();
@@ -93,6 +117,7 @@ public class ObjectInstanceManager : MonoBehaviour
             uint cellID = to1D(negativeCorner, latticeDimensions);
 
             AddLatticeCell(negativeCorner, cellID);
+            latticeCells[cellID].meshVertices.Add((uint)i);
         }
     }
 
@@ -100,7 +125,7 @@ public class ObjectInstanceManager : MonoBehaviour
     {
         if (!latticeCells.ContainsKey(cellID))
         {
-            uint[] particles =
+            uint[] pidx =
             {
                 TryAddParticle(negativeCorner + new uint3(0, 0, 0)),
                 TryAddParticle(negativeCorner + new uint3(1, 0, 0)),
@@ -111,9 +136,13 @@ public class ObjectInstanceManager : MonoBehaviour
                 TryAddParticle(negativeCorner + new uint3(1, 1, 1)),
                 TryAddParticle(negativeCorner + new uint3(0, 1, 1)),
             };
-            LatticeCell newCell = new LatticeCell(cellID, particles);
 
+            uint cellParity = negativeCorner.x%2 + negativeCorner.y%2 * 2 + negativeCorner.z%2 * 4;
+            
+            AddDistanceConstraints(pidx, cellParity);
+            AddVolumeConstraints(pidx, cellParity);
 
+            LatticeCell newCell = new LatticeCell(cellID, pidx);
             latticeCells.Add(cellID, newCell);
         }
     }
@@ -127,6 +156,50 @@ public class ObjectInstanceManager : MonoBehaviour
         particlesDictionary.Add(particleIndex, (uint)particles.Count);
         particles.Add(position * latticeLengths);
         return (uint)particles.Count - 1;
+    }
+
+    private void AddDistanceConstraints(uint[] pidx, uint cellParity)
+    {
+        uint initDisCount, disCount;
+        initDisCount = disCount = (uint)distanceConstraints[cellParity].Count;
+        for (int x = 0; x < 8; x++)
+        {
+            for (int y = x+1; y < 8; y++)
+            {
+                uint2 edge = new uint2(pidx[x], pidx[y]);
+
+                if (addedEdges.Contains(edge) || addedEdges.Contains(edge.yx)) continue;
+
+                addedEdges.Add(edge);
+                disCount++;
+                distanceConstraints[cellParity].Add(new DistanceConstraint(edge, 
+                    math.distance(particles[(int)edge.x], particles[(int)edge.y])));
+            }
+        }
+        disLatticeGroups[cellParity].Add(new uint2(initDisCount, disCount));
+    }
+
+    private void AddVolumeConstraints(uint[] pidx, uint cellParity)
+    {
+        int[,] tetrahedra = new int[,]
+        {
+            {0,2,7,5}, {0,5,1,2}, {0,5,7,4}, {0,2,3,7}, {6,5,7,2}
+        };
+
+        for (int i = 0; i < 5; i++)
+        {
+            int p0 = (int)pidx[tetrahedra[i, 0]];
+            int p1 = (int)pidx[tetrahedra[i, 1]];
+            int p2 = (int)pidx[tetrahedra[i, 2]];
+            int p3 = (int)pidx[tetrahedra[i, 3]];
+
+            float volume = math.dot(
+                particles[p1] - particles[p0], math.cross(particles[p2] - particles[p0], particles[p3] - particles[p0])
+            ) / 6f;
+            // Debug.Log($"Tetra {i} volume = {volume}");
+
+            volumeConstraints[cellParity].Add(new VolumeConstraint(new uint4((uint)p0, (uint)p1, (uint)p2, (uint)p3), volume));
+        }
     }
 
     public uint to1D(uint3 pos, uint3 dimensions)
@@ -149,15 +222,38 @@ public class ObjectInstanceManager : MonoBehaviour
     {
         if (mesh == null) return;
 
-        Gizmos.color = Color.green;
-        for (int x = 0; x < latticeDimensions.x; x++)
+        // Gizmos.color = Color.green;
+        // for (int x = 0; x < latticeDimensions.x; x++)
+        // {
+        //     for (int y = 0; y < latticeDimensions.y; y++)
+        //     {
+        //         for (int z = 0; z < latticeDimensions.z; z++)
+        //         {
+        //             float3 cellCenter = latticeNegativeCorner + new float3(x + 0.5f, y + 0.5f, z + 0.5f) * latticeLengths;
+        //             Gizmos.DrawWireCube(cellCenter, latticeLengths);
+        //         }
+        //     }
+        // }
+
+        for (int f = 0; f < 8; f++)
         {
-            for (int y = 0; y < latticeDimensions.y; y++)
+            if (f == 0) Gizmos.color = Color.white;
+            if (f == 1) Gizmos.color = Color.black;
+            if (f == 2) Gizmos.color = Color.magenta;
+            if (f == 3) Gizmos.color = Color.green;
+            if (f == 4) Gizmos.color = Color.blue;
+            if (f == 5) Gizmos.color = Color.brown;
+            if (f == 6) Gizmos.color = Color.dimGray;
+            if (f == 7) Gizmos.color = Color.orange;
+            if (f == 8) Gizmos.color = Color.yellow;
+            for (uint g = 0; g < disLatticeGroups[f].Count; g++)
             {
-                for (int z = 0; z < latticeDimensions.z; z++)
+                for (uint i = disLatticeGroups[f][(int)g].x; i < disLatticeGroups[f][(int)g].y; i++)
                 {
-                    float3 cellCenter = latticeNegativeCorner + new float3(x + 0.5f, y + 0.5f, z + 0.5f) * latticeLengths;
-                    Gizmos.DrawWireCube(cellCenter, latticeLengths);
+                    Vector3 lineStart = particles[(int)distanceConstraints[f][(int)i].pidx.x];
+                    Vector3 lineEnd = particles[(int)distanceConstraints[f][(int)i].pidx.y];
+
+                    Gizmos.DrawLine(lineStart, lineEnd);
                 }
             }
         }
