@@ -1,6 +1,5 @@
+using System;
 using System.Collections.Generic;
-using JetBrains.Annotations;
-using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine;
 
@@ -43,6 +42,7 @@ public class LatticeCell
 public class ObjectInstanceManager : MonoBehaviour
 {
     // Mesh data
+    [SerializeField] private Mesh collisionMesh;
     private Mesh mesh;
     private float3[] meshVertices;
 
@@ -91,6 +91,9 @@ public class ObjectInstanceManager : MonoBehaviour
 
         InitLattice();
         LoopVertices();
+        LoopInsideCells();
+
+        for (int i = 0; i < particles.Count; i++) particles[i] = transform.TransformPoint(particles[i]);
     }
 
     float EPSILON = 1e-4f;
@@ -154,7 +157,7 @@ public class ObjectInstanceManager : MonoBehaviour
         if (particlesDictionary.TryGetValue(particleIndex, out uint index)) return index;
 
         particlesDictionary.Add(particleIndex, (uint)particles.Count);
-        particles.Add(position * latticeLengths);
+        particles.Add(latticeNegativeCorner + position * latticeLengths);
         return (uint)particles.Count - 1;
     }
 
@@ -202,6 +205,148 @@ public class ObjectInstanceManager : MonoBehaviour
         }
     }
 
+    private void LoopInsideCells()
+    {
+        if (collisionMesh == null) return;
+        Vector3[] colMeshVerts = collisionMesh.vertices;
+        int[] colMeshTris = collisionMesh.triangles;
+        HashSet<int> edgeHits = new HashSet<int>();
+
+        int numberOfCells = (int)(latticeDimensions.x * latticeDimensions.y * latticeDimensions.z);
+        float3 randDir = math.normalize(UnityEngine.Random.insideUnitSphere);
+
+        for (uint cellID = 0; cellID < numberOfCells; cellID++)
+        {
+            if (latticeCells.ContainsKey(cellID)) continue;
+            uint3 negativeCorner = to3D(cellID);
+            float3 negativeCornerPos = latticeNegativeCorner + negativeCorner * latticeLengths;
+
+            edgeHits.Clear();
+            int intersections = 0;
+
+            for (int i = 0; i < colMeshTris.Length; i+=3)
+            {
+                float3 v0 = colMeshVerts[colMeshTris[i]];
+                float3 v1 = colMeshVerts[colMeshTris[i+1]];
+                float3 v2 = colMeshVerts[colMeshTris[i+2]];
+
+                float result = RayIntersectsTriangleDetailed(negativeCornerPos, randDir, v0, v1, v2);
+
+                if (result == -2f) intersections++;
+                else if (result > 0)
+                {
+                    int key = Mathf.RoundToInt(result * 100000f);
+                    if (!edgeHits.Add(key))
+                    {
+                        edgeHits.Remove(key);
+                        intersections++;
+                    }
+                }
+
+                if (CellIntersectsTriangle(negativeCornerPos, v0, v1, v2))
+                {
+                    intersections = 1;
+                    break;
+                }
+            }
+
+            // Test failed condition
+            if (intersections % 2 == 0) continue;
+
+            AddLatticeCell(negativeCorner, cellID);
+        }
+    }
+
+    /// <summary>
+    /// Performs ray-triangle intersection using the Möller–Trumbore algorithm.
+    /// Returns:
+    /// - -1f if there is no intersection,
+    /// - -2f if there is a valid intersection (not on an edge),
+    /// - positive t value if the ray intersects the triangle near an edge (used for edge de-duplication).
+    /// </summary>
+    private float RayIntersectsTriangleDetailed(float3 rayOrigin, float3 rayDir, float3 v0, float3 v1, float3 v2)
+    {
+        float3 edge1 = v1 - v0;
+        float3 edge2 = v2 - v0;
+        float3 h = math.cross(rayDir, edge2);
+        float a = math.dot(edge1, h);
+        if (math.abs(a) < 1e-5f) return -1f;
+
+        float f = 1f / a;
+        float3 s = rayOrigin - v0;
+        float u = f * math.dot(s, h);
+        if (u < 0f || u > 1f) return -1f;
+
+        float3 q = math.cross(s, edge1);
+        float v = f * math.dot(rayDir, q);
+        if (v < 0f || u + v > 1f) return -1f;
+
+        float t = f * math.dot(edge2, q);
+        if (t < 1e-5f) return -1f;
+
+        if (u < 1e-5f || v < 1e-5f || math.abs(u + v - 1f) < 1e-5f)
+            return t;
+
+        return -2f;
+    }
+
+    private bool CellIntersectsTriangle(float3 negativeCornerPos, float3 v0, float3 v1, float3 v2)
+    {
+        float3 t0 = negativeCornerPos;
+        float3 t1 = negativeCornerPos + latticeLengths * new float3(1, 0, 0);
+        float3 t2 = negativeCornerPos + latticeLengths * new float3(1, 1, 0);
+        float3 t3 = negativeCornerPos + latticeLengths * new float3(0, 1, 0);
+        float3 t4 = negativeCornerPos + latticeLengths * new float3(0, 0, 1);
+        float3 t5 = negativeCornerPos + latticeLengths * new float3(1, 0, 1);
+        float3 t6 = negativeCornerPos + latticeLengths * new float3(1, 1, 1);
+        float3 t7 = negativeCornerPos + latticeLengths * new float3(0, 1, 1);
+
+        if (LineSegmentIntersectsTriangle(t0, t1, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t0, t3, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t0, t4, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t2, t1, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t2, t3, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t2, t6, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t5, t1, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t5, t4, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t5, t6, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t7, t6, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t7, t4, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t7, t3, v0, v1, v2)) return true;
+        return false;
+    }
+
+    private bool LineSegmentIntersectsTriangle(float3 p0, float3 p1, float3 v0, float3 v1, float3 v2)
+    {
+        float3 dir = p1 - p0;
+        float segLenSq = math.lengthsq(dir);
+        if (segLenSq < 1e-5f * 1e-5f) return false; // degenerate (very short) segment
+
+        // Möller–Trumbore with dir = p1 - p0
+        float3 edge1 = v1 - v0;
+        float3 edge2 = v2 - v0;
+        float3 h = math.cross(dir, edge2);
+        float a = math.dot(edge1, h);
+        if (math.abs(a) < 1e-5f) return false; // parallel or degenerate
+
+        float f = 1f / a;
+        float3 s = p0 - v0;
+        float u = f * math.dot(s, h);
+        if (u < -1e-5f || u > 1f + 1e-5f) return false;
+
+        float3 q = math.cross(s, edge1);
+        float v = f * math.dot(dir, q);
+        if (v < -1e-5f || u + v > 1f + 1e-5f) return false;
+
+        float t = f * math.dot(edge2, q);
+        // Here t is in parametric units of dir: intersection point = p0 + t * dir.
+        // For the segment we need 0 <= t <= 1 (with epsilon tolerance)
+        if (t < -1e-5f || t > 1f + 1e-5f) return false;
+
+        return true;
+    }
+    
+
     public uint to1D(uint3 pos, uint3 dimensions)
     {
         return (pos.z * dimensions.x * dimensions.y) + (pos.y * dimensions.x) + pos.x;
@@ -237,15 +382,14 @@ public class ObjectInstanceManager : MonoBehaviour
 
         for (int f = 0; f < 8; f++)
         {
-            if (f == 0) Gizmos.color = Color.white;
-            if (f == 1) Gizmos.color = Color.black;
-            if (f == 2) Gizmos.color = Color.magenta;
+            if (f == 0) Gizmos.color = Color.red;
+            if (f == 1) Gizmos.color = Color.orange;
+            if (f == 2) Gizmos.color = Color.yellow;
             if (f == 3) Gizmos.color = Color.green;
-            if (f == 4) Gizmos.color = Color.blue;
-            if (f == 5) Gizmos.color = Color.brown;
-            if (f == 6) Gizmos.color = Color.dimGray;
-            if (f == 7) Gizmos.color = Color.orange;
-            if (f == 8) Gizmos.color = Color.yellow;
+            if (f == 4) Gizmos.color = Color.cyan;
+            if (f == 5) Gizmos.color = Color.blue;
+            if (f == 6) Gizmos.color = Color.magenta;
+            if (f == 7) Gizmos.color = Color.white;
             for (uint g = 0; g < disLatticeGroups[f].Count; g++)
             {
                 for (uint i = disLatticeGroups[f][(int)g].x; i < disLatticeGroups[f][(int)g].y; i++)
