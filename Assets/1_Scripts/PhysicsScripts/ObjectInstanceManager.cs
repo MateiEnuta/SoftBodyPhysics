@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Unity.Mathematics;
 using UnityEngine;
 
+#region Variables
 public class DistanceConstraint
 {
     public uint2 pidx;
@@ -59,12 +60,15 @@ public class ObjectInstanceManager : MonoBehaviour
 
     // Constraint data
     private HashSet<uint2> addedEdges;
-    private List<uint2>[] disLatticeGroups;
+    private List<uint2>[] distanceConsGroups;
     private List<DistanceConstraint>[] distanceConstraints;
     private List<VolumeConstraint>[] volumeConstraints;
+#endregion
 
+#region Initialisation
     private void Awake()
     {
+        // Mesh data 
         mesh = GetComponent<MeshFilter>().mesh;
         if (mesh == null) return;
         meshVertices = new float3[mesh.vertexCount];
@@ -73,32 +77,44 @@ public class ObjectInstanceManager : MonoBehaviour
             meshVertices[i] = mesh.vertices[i];
         }
 
-        // Setup
-        latticeDimensions = math.max(latticeDimensions, new uint3(1, 1, 1));
-        particlesDimensions = latticeDimensions + new uint3(1, 1, 1);
-
-        addedEdges = new HashSet<uint2>();
-        disLatticeGroups = new List<uint2>[8];
-        distanceConstraints = new List<DistanceConstraint>[8];
-        volumeConstraints = new List<VolumeConstraint>[8];
-        for (int i = 0; i < 8; i++)
-        {
-            disLatticeGroups[i] = new List<uint2>();
-            distanceConstraints[i] = new List<DistanceConstraint>();
-            volumeConstraints[i] = new List<VolumeConstraint>();
-        }
-
-
-        InitLattice();
+        // Initialising functions
+        InitConstraints();
+        InitLatticeAndParticles();
+        // Main functions
         LoopVertices();
         LoopInsideCells();
-
+        // Transforms particle positions from local mesh space to world space
         for (int i = 0; i < particles.Count; i++) particles[i] = transform.TransformPoint(particles[i]);
+        // Finalization functions
+        CleanUp();
+    }
+
+    private void InitConstraints()
+    {
+        // Distance constraints data
+        addedEdges = new HashSet<uint2>(); // for duplicate check
+        distanceConsGroups = new List<uint2>[8];
+        distanceConstraints = new List<DistanceConstraint>[8];
+
+        // Volume constraints data
+        volumeConstraints = new List<VolumeConstraint>[8];
+
+        for (int i = 0; i < 8; i++)
+        {
+            // Distance constraints data
+            distanceConsGroups[i] = new List<uint2>();
+            distanceConstraints[i] = new List<DistanceConstraint>();
+
+            // Volume constraints data
+            volumeConstraints[i] = new List<VolumeConstraint>();
+        }
     }
 
     float EPSILON = 1e-4f;
-    private void InitLattice()
+    private void InitLatticeAndParticles()
     {
+        latticeDimensions = math.max(latticeDimensions, new uint3(1, 1, 1));
+        particlesDimensions = latticeDimensions + new uint3(1, 1, 1);
         latticeNegativeCorner = (float3)mesh.bounds.min - new float3(EPSILON, EPSILON, EPSILON);
         latticeLengths = (float3)mesh.bounds.size + new float3(2 * EPSILON, 2 * EPSILON, 2 * EPSILON);
         latticeLengths /= (float3)latticeDimensions;
@@ -111,10 +127,27 @@ public class ObjectInstanceManager : MonoBehaviour
         particlesDictionary = new Dictionary<uint, uint>(numberOfParticles);
     }
 
+    /// <summary>
+    /// Frees up memory.
+    /// </summary>
+    private void CleanUp()
+    {
+        addedEdges = null;
+        particlesDictionary = null;
+        meshVertices = null;
+    }
+#endregion
+
+#region Shape addition
+    /// <summary>
+    /// Loops through all vertices and adds them to the coresponding lattice cell.
+    /// Also handles the trilinear interpolation for each particle.
+    /// </summary>
     private void LoopVertices()
     {
         for (int i = 0; i < meshVertices.Length; i++)
         {
+            // Calculates the lattice cell of the current mesh vertex
             float3 positionInLattice = meshVertices[i] - latticeNegativeCorner;
             uint3 negativeCorner = (uint3)(positionInLattice / latticeLengths);
             uint cellID = to1D(negativeCorner, latticeDimensions);
@@ -123,11 +156,18 @@ public class ObjectInstanceManager : MonoBehaviour
             latticeCells[cellID].meshVertices.Add((uint)i);
         }
     }
+#endregion
 
+#region Cell addition
+    /// <summary>
+    /// Adds new cells, each newly added cell also has all of it's
+    /// constraints added and indexed.
+    /// </summary>
     private void AddLatticeCell(uint3 negativeCorner, uint cellID)
     {
         if (!latticeCells.ContainsKey(cellID))
         {
+            // Adds particles in a specific order
             uint[] pidx =
             {
                 TryAddParticle(negativeCorner + new uint3(0, 0, 0)),
@@ -150,6 +190,9 @@ public class ObjectInstanceManager : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Returns the index of the present or newly added vertex.
+    /// </summary>
     private uint TryAddParticle(uint3 position)
     {
         uint particleIndex = to1D(position, particlesDimensions);
@@ -179,7 +222,7 @@ public class ObjectInstanceManager : MonoBehaviour
                     math.distance(particles[(int)edge.x], particles[(int)edge.y])));
             }
         }
-        disLatticeGroups[cellParity].Add(new uint2(initDisCount, disCount));
+        distanceConsGroups[cellParity].Add(new uint2(initDisCount, disCount));
     }
 
     private void AddVolumeConstraints(uint[] pidx, uint cellParity)
@@ -204,17 +247,29 @@ public class ObjectInstanceManager : MonoBehaviour
             volumeConstraints[cellParity].Add(new VolumeConstraint(new uint4((uint)p0, (uint)p1, (uint)p2, (uint)p3), volume));
         }
     }
+#endregion
 
+#region Collision shape addition
+    /// <summary>
+    /// Loops though cells that were not added yet and checks
+    /// if they either intersect the collision mesh or fully
+    /// inside of it. 
+    /// Also handles the creation of the collision mesh and 
+    /// it's constriants.
+    /// </summary>
     private void LoopInsideCells()
     {
         if (collisionMesh == null) return;
         Vector3[] colMeshVerts = collisionMesh.vertices;
         int[] colMeshTris = collisionMesh.triangles;
+        // Hash set for casses where it hits an edge of the triangle
         HashSet<int> edgeHits = new HashSet<int>();
 
         int numberOfCells = (int)(latticeDimensions.x * latticeDimensions.y * latticeDimensions.z);
+        // A random direction for avoiding hitting a triangle on the edges
         float3 randDir = math.normalize(UnityEngine.Random.insideUnitSphere);
 
+        // Loops through each cell and only checks those that were not added already
         for (uint cellID = 0; cellID < numberOfCells; cellID++)
         {
             if (latticeCells.ContainsKey(cellID)) continue;
@@ -224,17 +279,20 @@ public class ObjectInstanceManager : MonoBehaviour
             edgeHits.Clear();
             int intersections = 0;
 
+            // Loops through the triangles of the mesh collider and checks for intersections
             for (int i = 0; i < colMeshTris.Length; i+=3)
             {
                 float3 v0 = colMeshVerts[colMeshTris[i]];
                 float3 v1 = colMeshVerts[colMeshTris[i+1]];
                 float3 v2 = colMeshVerts[colMeshTris[i+2]];
 
+                // Main check for casses where the cell is completly inside the collider mesh
                 float result = RayIntersectsTriangleDetailed(negativeCornerPos, randDir, v0, v1, v2);
-
                 if (result == -2f) intersections++;
                 else if (result > 0)
                 {
+                    // In case of an edge hit, indexes it with some kind of accuracy
+                    // and checks if it was already added and if so counts that as an intersection
                     int key = Mathf.RoundToInt(result * 100000f);
                     if (!edgeHits.Add(key))
                     {
@@ -243,6 +301,7 @@ public class ObjectInstanceManager : MonoBehaviour
                     }
                 }
 
+                // Secundary check where the cell collides with the mesh but not inside of it
                 if (CellIntersectsTriangle(negativeCornerPos, v0, v1, v2))
                 {
                     intersections = 1;
@@ -250,7 +309,7 @@ public class ObjectInstanceManager : MonoBehaviour
                 }
             }
 
-            // Test failed condition
+            // Test fail condition, either outside or interected with the mesh
             if (intersections % 2 == 0) continue;
 
             AddLatticeCell(negativeCorner, cellID);
@@ -316,6 +375,10 @@ public class ObjectInstanceManager : MonoBehaviour
         return false;
     }
 
+    /// <summary>
+    /// Similar to RayIntersectsTriangleDetailed but only returns a bool if the 
+    /// given lattice cell intersects the given triangle
+    /// </summary>
     private bool LineSegmentIntersectsTriangle(float3 p0, float3 p1, float3 v0, float3 v1, float3 v2)
     {
         float3 dir = p1 - p0;
@@ -345,8 +408,9 @@ public class ObjectInstanceManager : MonoBehaviour
 
         return true;
     }
-    
+#endregion
 
+#region Helper functions
     public uint to1D(uint3 pos, uint3 dimensions)
     {
         return (pos.z * dimensions.x * dimensions.y) + (pos.y * dimensions.x) + pos.x;
@@ -390,9 +454,9 @@ public class ObjectInstanceManager : MonoBehaviour
             if (f == 5) Gizmos.color = Color.blue;
             if (f == 6) Gizmos.color = Color.magenta;
             if (f == 7) Gizmos.color = Color.white;
-            for (uint g = 0; g < disLatticeGroups[f].Count; g++)
+            for (uint g = 0; g < distanceConsGroups[f].Count; g++)
             {
-                for (uint i = disLatticeGroups[f][(int)g].x; i < disLatticeGroups[f][(int)g].y; i++)
+                for (uint i = distanceConsGroups[f][(int)g].x; i < distanceConsGroups[f][(int)g].y; i++)
                 {
                     Vector3 lineStart = particles[(int)distanceConstraints[f][(int)i].pidx.x];
                     Vector3 lineEnd = particles[(int)distanceConstraints[f][(int)i].pidx.y];
@@ -402,4 +466,5 @@ public class ObjectInstanceManager : MonoBehaviour
             }
         }
     }
+#endregion
 }
