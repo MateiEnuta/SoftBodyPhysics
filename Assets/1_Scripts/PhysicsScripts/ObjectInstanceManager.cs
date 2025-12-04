@@ -4,23 +4,23 @@ using Unity.Mathematics;
 using UnityEngine;
 
 #region Variables
-public class DistanceConstraint
+public class DistanceConstraintRef
 {
     public uint2 pidx;
     public float restLenght;
 
-    public DistanceConstraint(uint2 pidx, float restLenght)
+    public DistanceConstraintRef(uint2 pidx, float restLenght)
     {
         this.pidx = pidx;
         this.restLenght = restLenght;
     }
 }
-public class VolumeConstraint
+public class VolumeConstraintRef
 {
     public uint4 pidx;
     public float restVolume;
 
-    public VolumeConstraint(uint4 pidx, float restVolume)
+    public VolumeConstraintRef(uint4 pidx, float restVolume)
     {
         this.pidx = pidx;
         this.restVolume = restVolume;
@@ -42,6 +42,11 @@ public class LatticeCell
 
 public class ObjectInstanceManager : MonoBehaviour
 {
+    // Object data
+    [SerializeField] private float mass = 1;
+    [SerializeField] private float distanceCompliance = 0;
+    [SerializeField] private float volumeCompliance = 0;
+
     // Mesh data
     [SerializeField] private Mesh collisionMesh;
     private Mesh mesh;
@@ -60,9 +65,9 @@ public class ObjectInstanceManager : MonoBehaviour
 
     // Constraint data
     private HashSet<uint2> addedEdges;
-    private List<uint2>[] distanceConsGroups;
-    private List<DistanceConstraint>[] distanceConstraints;
-    private List<VolumeConstraint>[] volumeConstraints;
+    private List<uint2>[] distanceConGroups;
+    private List<DistanceConstraintRef>[] distanceConstraints;
+    private List<VolumeConstraintRef>[] volumeConstraints;
 #endregion
 
 #region Initialisation
@@ -93,20 +98,20 @@ public class ObjectInstanceManager : MonoBehaviour
     {
         // Distance constraints data
         addedEdges = new HashSet<uint2>(); // for duplicate check
-        distanceConsGroups = new List<uint2>[8];
-        distanceConstraints = new List<DistanceConstraint>[8];
+        distanceConGroups = new List<uint2>[8];
+        distanceConstraints = new List<DistanceConstraintRef>[8];
 
         // Volume constraints data
-        volumeConstraints = new List<VolumeConstraint>[8];
+        volumeConstraints = new List<VolumeConstraintRef>[8];
 
         for (int i = 0; i < 8; i++)
         {
             // Distance constraints data
-            distanceConsGroups[i] = new List<uint2>();
-            distanceConstraints[i] = new List<DistanceConstraint>();
+            distanceConGroups[i] = new List<uint2>();
+            distanceConstraints[i] = new List<DistanceConstraintRef>();
 
             // Volume constraints data
-            volumeConstraints[i] = new List<VolumeConstraint>();
+            volumeConstraints[i] = new List<VolumeConstraintRef>();
         }
     }
 
@@ -126,7 +131,9 @@ public class ObjectInstanceManager : MonoBehaviour
         particles = new List<float3>(numberOfParticles);
         particlesDictionary = new Dictionary<uint, uint>(numberOfParticles);
     }
+#endregion
 
+#region Clean up
     /// <summary>
     /// Frees up memory.
     /// </summary>
@@ -135,6 +142,7 @@ public class ObjectInstanceManager : MonoBehaviour
         addedEdges = null;
         particlesDictionary = null;
         meshVertices = null;
+        latticeCells = null;
     }
 #endregion
 
@@ -218,11 +226,12 @@ public class ObjectInstanceManager : MonoBehaviour
 
                 addedEdges.Add(edge);
                 disCount++;
-                distanceConstraints[cellParity].Add(new DistanceConstraint(edge, 
-                    math.distance(particles[(int)edge.x], particles[(int)edge.y])));
+                distanceConstraints[cellParity].Add(new DistanceConstraintRef(edge, 
+                    math.distance(transform.TransformPoint(particles[(int)edge.x]), 
+                                transform.TransformPoint(particles[(int)edge.y]))));
             }
         }
-        distanceConsGroups[cellParity].Add(new uint2(initDisCount, disCount));
+        distanceConGroups[cellParity].Add(new uint2(initDisCount, disCount));
     }
 
     private void AddVolumeConstraints(uint[] pidx, uint cellParity)
@@ -240,11 +249,13 @@ public class ObjectInstanceManager : MonoBehaviour
             int p3 = (int)pidx[tetrahedra[i, 3]];
 
             float volume = math.dot(
-                particles[p1] - particles[p0], math.cross(particles[p2] - particles[p0], particles[p3] - particles[p0])
+                transform.TransformPoint(particles[p1]) - transform.TransformPoint(particles[p0]), 
+                math.cross(transform.TransformPoint(particles[p2]) - transform.TransformPoint(particles[p0]), 
+                    transform.TransformPoint(particles[p3]) - transform.TransformPoint(particles[p0]))
             ) / 6f;
             // Debug.Log($"Tetra {i} volume = {volume}");
 
-            volumeConstraints[cellParity].Add(new VolumeConstraint(new uint4((uint)p0, (uint)p1, (uint)p2, (uint)p3), volume));
+            volumeConstraints[cellParity].Add(new VolumeConstraintRef(new uint4((uint)p0, (uint)p1, (uint)p2, (uint)p3), volume));
         }
     }
 #endregion
@@ -454,9 +465,9 @@ public class ObjectInstanceManager : MonoBehaviour
             if (f == 5) Gizmos.color = Color.blue;
             if (f == 6) Gizmos.color = Color.magenta;
             if (f == 7) Gizmos.color = Color.white;
-            for (uint g = 0; g < distanceConsGroups[f].Count; g++)
+            for (uint g = 0; g < distanceConGroups[f].Count; g++)
             {
-                for (uint i = distanceConsGroups[f][(int)g].x; i < distanceConsGroups[f][(int)g].y; i++)
+                for (uint i = distanceConGroups[f][(int)g].x; i < distanceConGroups[f][(int)g].y; i++)
                 {
                     Vector3 lineStart = particles[(int)distanceConstraints[f][(int)i].pidx.x];
                     Vector3 lineEnd = particles[(int)distanceConstraints[f][(int)i].pidx.y];
