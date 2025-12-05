@@ -40,20 +40,35 @@ public class LatticeCell
     }
 }
 
+public class VertexTriLinear
+{
+    public uint4 idx03, idx47;
+    public float3 triLinearValues;
+
+    public VertexTriLinear(uint4 idx03, uint4 idx47, float3 triLinearValues)
+    {
+        this.idx03 = idx03;
+        this.idx47 = idx47;
+        this.triLinearValues = triLinearValues;
+    }
+}
+
 public class ObjectInstanceManager : MonoBehaviour
 {
-    // Object data
+    // Public object data
+    [SerializeField] private Mesh collisionMesh;
+    [SerializeField] private uint3 latticeDimensions;
     [SerializeField] private float mass = 1;
     [SerializeField] private float distanceCompliance = 0;
     [SerializeField] private float volumeCompliance = 0;
 
+
     // Mesh data
-    [SerializeField] private Mesh collisionMesh;
     private Mesh mesh;
-    private float3[] meshVertices;
+    private Vector3[] meshVertices;
+    private VertexTriLinear[] verticesInter;
 
     // Lattice data
-    [SerializeField] private uint3 latticeDimensions;
     private float3 latticeNegativeCorner;
     private float3 latticeLengths;
     private Dictionary<uint, LatticeCell> latticeCells;
@@ -64,7 +79,7 @@ public class ObjectInstanceManager : MonoBehaviour
     private Dictionary<uint, uint> particlesDictionary;
 
     // Constraint data
-    private HashSet<uint2> addedEdges;
+    private HashSet<uint2> addedEdges; // Redundancy list
     private List<uint2>[] distanceConGroups;
     private List<DistanceConstraintRef>[] distanceConstraints;
     private List<VolumeConstraintRef>[] volumeConstraints;
@@ -73,18 +88,12 @@ public class ObjectInstanceManager : MonoBehaviour
 #region Initialisation
     private void Awake()
     {
-        // Mesh data 
         mesh = GetComponent<MeshFilter>().mesh;
         if (mesh == null) return;
-        meshVertices = new float3[mesh.vertexCount];
-        for (int i = 0; i < mesh.vertexCount; i++)
-        {
-            meshVertices[i] = mesh.vertices[i];
-        }
 
         // Initialising functions
-        InitConstraints();
         InitLatticeAndParticles();
+        InitConstraints();
         // Main functions
         LoopVertices();
         LoopInsideCells();
@@ -153,15 +162,33 @@ public class ObjectInstanceManager : MonoBehaviour
     /// </summary>
     private void LoopVertices()
     {
+        meshVertices = mesh.vertices;
+        verticesInter = new VertexTriLinear[mesh.vertexCount];
+
         for (int i = 0; i < meshVertices.Length; i++)
         {
             // Calculates the lattice cell of the current mesh vertex
-            float3 positionInLattice = meshVertices[i] - latticeNegativeCorner;
+            float3 positionInLattice = (float3)meshVertices[i] - latticeNegativeCorner;
             uint3 negativeCorner = (uint3)(positionInLattice / latticeLengths);
             uint cellID = to1D(negativeCorner, latticeDimensions);
 
+            // Try adding the containing cell
             AddLatticeCell(negativeCorner, cellID);
+            // Update the containing cell
             latticeCells[cellID].meshVertices.Add((uint)i);
+
+            // Stores data for trilinear interpolation
+            verticesInter[i] = new VertexTriLinear(
+                new uint4(TryAddParticle(negativeCorner + new uint3(0, 0, 0)),
+                          TryAddParticle(negativeCorner + new uint3(1, 0, 0)),
+                          TryAddParticle(negativeCorner + new uint3(1, 1, 0)),
+                          TryAddParticle(negativeCorner + new uint3(0, 1, 0))), 
+                new uint4(TryAddParticle(negativeCorner + new uint3(0, 0, 1)),
+                          TryAddParticle(negativeCorner + new uint3(1, 0, 1)),
+                          TryAddParticle(negativeCorner + new uint3(1, 1, 1)),
+                          TryAddParticle(negativeCorner + new uint3(0, 1, 1))), 
+                positionInLattice / latticeLengths
+            );
         }
     }
 #endregion
@@ -178,14 +205,14 @@ public class ObjectInstanceManager : MonoBehaviour
             // Adds particles in a specific order
             uint[] pidx =
             {
-                TryAddParticle(negativeCorner + new uint3(0, 0, 0)),
-                TryAddParticle(negativeCorner + new uint3(1, 0, 0)),
-                TryAddParticle(negativeCorner + new uint3(1, 1, 0)),
-                TryAddParticle(negativeCorner + new uint3(0, 1, 0)),
-                TryAddParticle(negativeCorner + new uint3(0, 0, 1)),
-                TryAddParticle(negativeCorner + new uint3(1, 0, 1)),
-                TryAddParticle(negativeCorner + new uint3(1, 1, 1)),
-                TryAddParticle(negativeCorner + new uint3(0, 1, 1)),
+                TryAddParticle(negativeCorner + new uint3(0, 0, 0)), // 0
+                TryAddParticle(negativeCorner + new uint3(1, 0, 0)), // 1
+                TryAddParticle(negativeCorner + new uint3(1, 1, 0)), // 2
+                TryAddParticle(negativeCorner + new uint3(0, 1, 0)), // 3
+                TryAddParticle(negativeCorner + new uint3(0, 0, 1)), // 4
+                TryAddParticle(negativeCorner + new uint3(1, 0, 1)), // 5
+                TryAddParticle(negativeCorner + new uint3(1, 1, 1)), // 6
+                TryAddParticle(negativeCorner + new uint3(0, 1, 1)), // 7
             };
 
             uint cellParity = negativeCorner.x%2 + negativeCorner.y%2 * 2 + negativeCorner.z%2 * 4;
