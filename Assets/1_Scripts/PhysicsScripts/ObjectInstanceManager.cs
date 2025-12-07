@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 #region Variables
 public class DistanceConstraintRef
@@ -40,7 +42,7 @@ public class LatticeCell
     }
 }
 
-public class VertexTriLinear
+public struct VertexTriLinear
 {
     public uint4 idx03, idx47;
     public float3 triLinearValues;
@@ -65,8 +67,8 @@ public class ObjectInstanceManager : MonoBehaviour
 
     // Mesh data
     private Mesh mesh;
+    private int numberOfVertices;
     private Vector3[] meshVertices;
-    private VertexTriLinear[] verticesInter;
 
     // Lattice data
     private float3 latticeNegativeCorner;
@@ -77,6 +79,7 @@ public class ObjectInstanceManager : MonoBehaviour
     private uint3 particlesDimensions;
     private List<float3> particles;
     private Dictionary<uint, uint> particlesDictionary;
+    private VertexTriLinear[] verticesTriLinear;
 
     // Constraint data
     private HashSet<uint2> addedEdges; // Redundancy list
@@ -90,6 +93,13 @@ public class ObjectInstanceManager : MonoBehaviour
     {
         mesh = GetComponent<MeshFilter>().mesh;
         if (mesh == null) return;
+        numberOfVertices = mesh.vertexCount;
+        mesh.MarkDynamic();
+        mesh.SetVertexBufferParams(numberOfVertices, 
+        new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3, stream: 0),
+        new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.Float32, 3, stream: 1),
+        new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2, stream: 2)
+        );
 
         // Initialising functions
         InitLatticeAndParticles();
@@ -101,6 +111,7 @@ public class ObjectInstanceManager : MonoBehaviour
         for (int i = 0; i < particles.Count; i++) particles[i] = transform.TransformPoint(particles[i]);
         // Finalization functions
         CleanUp();
+        UploadDataToSolver();
     }
 
     private void InitConstraints()
@@ -142,17 +153,24 @@ public class ObjectInstanceManager : MonoBehaviour
     }
 #endregion
 
-#region Clean up
-    /// <summary>
-    /// Frees up memory.
-    /// </summary>
-    private void CleanUp()
+#region Solver communitcation
+
+    public void UploadDataToSolver()
     {
-        addedEdges = null;
-        particlesDictionary = null;
-        meshVertices = null;
-        latticeCells = null;
+        JobPhysicsSolver solver = FindFirstObjectByType(typeof(JobPhysicsSolver)) as JobPhysicsSolver;
+
+        solver.AddSoftBody(
+            this, mass, distanceCompliance, volumeCompliance,
+            particles, distanceConGroups, distanceConstraints,
+            volumeConstraints, verticesTriLinear
+        );
     }
+
+    public void UpdateMesh(NativeArray<float3> vertices, int dataStart)
+    {
+        mesh.SetVertexBufferData(vertices, dataStart, 0, numberOfVertices);
+    }
+
 #endregion
 
 #region Shape addition
@@ -163,9 +181,9 @@ public class ObjectInstanceManager : MonoBehaviour
     private void LoopVertices()
     {
         meshVertices = mesh.vertices;
-        verticesInter = new VertexTriLinear[mesh.vertexCount];
+        verticesTriLinear = new VertexTriLinear[numberOfVertices];
 
-        for (int i = 0; i < meshVertices.Length; i++)
+        for (int i = 0; i < numberOfVertices; i++)
         {
             // Calculates the lattice cell of the current mesh vertex
             float3 positionInLattice = (float3)meshVertices[i] - latticeNegativeCorner;
@@ -178,7 +196,7 @@ public class ObjectInstanceManager : MonoBehaviour
             latticeCells[cellID].meshVertices.Add((uint)i);
 
             // Stores data for trilinear interpolation
-            verticesInter[i] = new VertexTriLinear(
+            verticesTriLinear[i] = new VertexTriLinear(
                 new uint4(TryAddParticle(negativeCorner + new uint3(0, 0, 0)),
                           TryAddParticle(negativeCorner + new uint3(1, 0, 0)),
                           TryAddParticle(negativeCorner + new uint3(1, 1, 0)),
@@ -445,6 +463,19 @@ public class ObjectInstanceManager : MonoBehaviour
         if (t < -1e-5f || t > 1f + 1e-5f) return false;
 
         return true;
+    }
+#endregion
+
+#region Clean up
+    /// <summary>
+    /// Frees up memory.
+    /// </summary>
+    private void CleanUp()
+    {
+        addedEdges = null;
+        particlesDictionary = null;
+        meshVertices = null;
+        latticeCells = null;
     }
 #endregion
 
