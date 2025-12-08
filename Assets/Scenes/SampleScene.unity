@@ -148,6 +148,8 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 11e391bfa8b594eab9cebb707339401c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::JobPhysicsSolver
+  substeps: 10
+  damping: 0
 --- !u!4 &169372810
 Transform:
   m_ObjectHideFlags: 0
@@ -157,7 +159,7 @@ Transform:
   m_GameObject: {fileID: 169372808}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -0.5031, y: 0, z: -1.70503}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -615,14 +617,14 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 4652372680364437531}
   serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalRotation: {x: 0.092552915, y: -0.16303062, z: 0.1750108, w: 0.9665538}
+  m_LocalPosition: {x: 0.20002653, y: 4.6125517, z: -0.06614334}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
   - {fileID: 7543861677402095762}
   m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+  m_LocalEulerAnglesHint: {x: 13.649, y: -16.917, z: 18.487}
 --- !u!23 &6597896863967678926
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -785,7 +787,7 @@ MonoBehaviour:
     x: 8
     y: 6
     z: 8
-  mass: 1
+  mass: 67
   distanceCompliance: 0
   volumeCompliance: 0
 --- !u!1660057539 &9223372036854775807

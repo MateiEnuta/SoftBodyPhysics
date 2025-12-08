@@ -112,6 +112,9 @@ public class ObjectInstanceManager : MonoBehaviour
         // Finalization functions
         CleanUp();
         UploadDataToSolver();
+
+        transform.position = Vector3.zero;
+        transform.rotation = Quaternion.identity;
     }
 
     private void InitConstraints()
@@ -205,7 +208,7 @@ public class ObjectInstanceManager : MonoBehaviour
                           TryAddParticle(negativeCorner + new uint3(1, 0, 1)),
                           TryAddParticle(negativeCorner + new uint3(1, 1, 1)),
                           TryAddParticle(negativeCorner + new uint3(0, 1, 1))), 
-                positionInLattice / latticeLengths
+                math.frac(positionInLattice / latticeLengths)
             );
         }
     }
