@@ -445,7 +445,10 @@ public class JobPhysicsSolver : MonoBehaviour
         // Constraints addition
         for (int k = 0; k < 8; k++)
         {
-            for (int i = 0; i < bodyDisConGroups[k].Count; i++) distanceConGroups[k].Add(bodyDisConGroups[k][i]);
+            uint disConsOffset = (uint)distanceConstraints[k].Length;
+            for (int i = 0; i < bodyDisConGroups[k].Count; i++) distanceConGroups[k].Add(
+                bodyDisConGroups[k][i] + new uint2(disConsOffset, disConsOffset)
+            );
             for (int i = 0; i < bodyDisConstraints[k].Count; i++) distanceConstraints[k].Add(
                 new DistanceConstraint(bodyDisConstraints[k][i], particlesOffset, bodyDisCompliance)
             );
