@@ -115,6 +115,7 @@ public class ObjectInstanceManager : MonoBehaviour
 
         transform.position = Vector3.zero;
         transform.rotation = Quaternion.identity;
+        transform.localScale = Vector3.one;
     }
 
     private void InitConstraints()
