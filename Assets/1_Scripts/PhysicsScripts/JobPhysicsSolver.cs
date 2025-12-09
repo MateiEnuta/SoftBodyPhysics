@@ -76,14 +76,14 @@ public struct VisualVerticesUpdate : IJobParallelFor
     public void Execute(int index)
     {
         // Indices of the 8 lattice particles influencing this vertex
-        int p0 = (int)verticesTriLinear[index].idx03.x;
-        int p1 = (int)verticesTriLinear[index].idx03.y;
-        int p2 = (int)verticesTriLinear[index].idx03.z;
-        int p3 = (int)verticesTriLinear[index].idx03.w;
-        int p4 = (int)verticesTriLinear[index].idx47.x;
-        int p5 = (int)verticesTriLinear[index].idx47.y;
-        int p6 = (int)verticesTriLinear[index].idx47.z;
-        int p7 = (int)verticesTriLinear[index].idx47.w;
+        int p0 = verticesTriLinear[index].idx03.x;
+        int p1 = verticesTriLinear[index].idx03.y;
+        int p2 = verticesTriLinear[index].idx03.z;
+        int p3 = verticesTriLinear[index].idx03.w;
+        int p4 = verticesTriLinear[index].idx47.x;
+        int p5 = verticesTriLinear[index].idx47.y;
+        int p6 = verticesTriLinear[index].idx47.z;
+        int p7 = verticesTriLinear[index].idx47.w;
 
         // Trilinear interpolation along x → y → z
         float3 x1 = math.lerp(particles[p0].position, particles[p1].position, verticesTriLinear[index].triLinearValues.x);
@@ -114,7 +114,7 @@ public struct DistanceConstraintsUpdate : IJobParallelFor
     [ReadOnly] public float damping;
 
     // Every element describes a range of constraints to process.
-    [ReadOnly] public NativeArray<uint2> distanceConGroups;
+    [ReadOnly] public NativeArray<int2> distanceConGroups;
 
     // Full list of actual constraints
     [NativeDisableParallelForRestriction] public NativeArray<DistanceConstraint> distanceConstraints;
@@ -125,7 +125,7 @@ public struct DistanceConstraintsUpdate : IJobParallelFor
     public void Execute(int index)
     {
         // Range of constraints belonging to this job index
-        int2 startEnd = (int2)distanceConGroups[index];
+        int2 startEnd = distanceConGroups[index];
 
         // Process each constraint sequentially
         for (int i = startEnd.x; i < startEnd.y; i++)
@@ -133,8 +133,8 @@ public struct DistanceConstraintsUpdate : IJobParallelFor
             DistanceConstraint constraint = distanceConstraints[i];
 
             // Load particle data
-            Particle p1 = particles[(int)constraint.particlesIdx.x];
-            Particle p2 = particles[(int)constraint.particlesIdx.y];
+            Particle p1 = particles[constraint.particlesIdx.x];
+            Particle p2 = particles[constraint.particlesIdx.y];
 
             float3 dir = p2.position - p1.position;
             float currentLength = math.length(dir);
@@ -184,8 +184,8 @@ public struct DistanceConstraintsUpdate : IJobParallelFor
             p2.position += p2.invMass * deltaLambda * grad2;
 
             // Write back
-            particles[(int)constraint.particlesIdx.x] = p1;
-            particles[(int)constraint.particlesIdx.y] = p2;
+            particles[constraint.particlesIdx.x] = p1;
+            particles[constraint.particlesIdx.y] = p2;
         }
     }
 }
@@ -212,10 +212,10 @@ public struct VolumeConstraintsUpdate : IJobParallelFor
             VolumeConstraint constraint = volumeConstraints[i];
 
             // Load tetra particles
-            Particle p1 = particles[(int)constraint.particlesIdx.x];
-            Particle p2 = particles[(int)constraint.particlesIdx.y];
-            Particle p3 = particles[(int)constraint.particlesIdx.z];
-            Particle p4 = particles[(int)constraint.particlesIdx.w];
+            Particle p1 = particles[constraint.particlesIdx.x];
+            Particle p2 = particles[constraint.particlesIdx.y];
+            Particle p3 = particles[constraint.particlesIdx.z];
+            Particle p4 = particles[constraint.particlesIdx.w];
 
             // Compute signed volume
             float3 v1 = p2.position - p1.position;
@@ -281,10 +281,10 @@ public struct VolumeConstraintsUpdate : IJobParallelFor
             p4.position += p4.invMass * deltaLambda * grad4;
 
             // Write back
-            particles[(int)constraint.particlesIdx.x] = p1;
-            particles[(int)constraint.particlesIdx.y] = p2;
-            particles[(int)constraint.particlesIdx.z] = p3;
-            particles[(int)constraint.particlesIdx.w] = p4;
+            particles[constraint.particlesIdx.x] = p1;
+            particles[constraint.particlesIdx.y] = p2;
+            particles[constraint.particlesIdx.z] = p3;
+            particles[constraint.particlesIdx.w] = p4;
         }
     }
 }
@@ -343,12 +343,12 @@ public struct Particle
 // Data for the distance constraint
 public struct DistanceConstraint
 {
-    public uint2 particlesIdx;
+    public int2 particlesIdx;
     public float restLength, compliance;
 
-    public DistanceConstraint(DistanceConstraintRef distanceConstraintRef, uint particlesOffset, float compliance)
+    public DistanceConstraint(DistanceConstraintRef distanceConstraintRef, int particlesOffset, float compliance)
     {
-        particlesIdx = distanceConstraintRef.pidx + new uint2(particlesOffset, particlesOffset);
+        particlesIdx = distanceConstraintRef.pidx + new int2(particlesOffset, particlesOffset);
         restLength = distanceConstraintRef.restLenght;
         this.compliance = compliance;
     }
@@ -357,12 +357,12 @@ public struct DistanceConstraint
 // Data for the volume constraint
 public struct VolumeConstraint
 {
-    public uint4 particlesIdx;
+    public int4 particlesIdx;
     public float restVolume, compliance;
 
-    public VolumeConstraint(VolumeConstraintRef volumeConstraintRef, uint particlesOffset, float compliance)
+    public VolumeConstraint(VolumeConstraintRef volumeConstraintRef, int particlesOffset, float compliance)
     {
-        particlesIdx = volumeConstraintRef.pidx + new uint4(particlesOffset, particlesOffset, particlesOffset, particlesOffset);
+        particlesIdx = volumeConstraintRef.pidx + new int4(particlesOffset, particlesOffset, particlesOffset, particlesOffset);
         restVolume = volumeConstraintRef.restVolume;
         this.compliance = compliance;
     }
@@ -371,7 +371,7 @@ public struct VolumeConstraint
 public class JobPhysicsSolver : MonoBehaviour
 {
     // Silver settings
-    [Range(0, 100)][SerializeField] private int substeps = 5;
+    [SerializeField] private int substeps = 5;
     [SerializeField] private float damping = 0;
 
     // Soft bodies data
@@ -385,7 +385,7 @@ public class JobPhysicsSolver : MonoBehaviour
     private NativeList<VertexTriLinear> verticesTriLinear;
 
     // Constraints data
-    private NativeList<uint2>[] distanceConGroups;
+    private NativeList<int2>[] distanceConGroups;
     private NativeList<DistanceConstraint>[] distanceConstraints;
     private NativeList<VolumeConstraint>[] volumeConstraints;
 
@@ -537,7 +537,7 @@ public class JobPhysicsSolver : MonoBehaviour
         float bodyDisCompliance,
         float bodyVolCompliance,
         List<float3> bodyParticles,
-        List<uint2>[] bodyDisConGroups,
+        List<int2>[] bodyDisConGroups,
         List<DistanceConstraintRef>[] bodyDisConstraints,
         List<VolumeConstraintRef>[] bodyVolConstraints,
         VertexTriLinear[] bodyVerticesTriLinear)
@@ -549,7 +549,7 @@ public class JobPhysicsSolver : MonoBehaviour
         softBodies.Add(new SoftBodyData(objectManager, verticesOffset));
 
         // Add all particles belonging to the body
-        uint particlesOffset = (uint)particles.Length;
+        int particlesOffset = particles.Length;
         float particleInvMass = 1f / (bodyMass / bodyParticles.Count);
 
         for (int i = 0; i < bodyParticles.Count; i++)
@@ -564,20 +564,20 @@ public class JobPhysicsSolver : MonoBehaviour
             verticesTriLinear.Add(
                 new VertexTriLinear(
                     bodyVerticesTriLinear[i].idx03 +
-                    new uint4(particlesOffset),
+                    new int4(particlesOffset),
                     bodyVerticesTriLinear[i].idx47 +
-                    new uint4(particlesOffset),
+                    new int4(particlesOffset),
                     bodyVerticesTriLinear[i].triLinearValues));
         }
 
         // Append all constraints into the solver's 8-channel structure
         for (int k = 0; k < 8; k++)
         {
-            uint disConsOffset = (uint)distanceConstraints[k].Length;
+            int disConsOffset = distanceConstraints[k].Length;
 
             // Add constraint ranges
             for (int i = 0; i < bodyDisConGroups[k].Count; i++)
-                distanceConGroups[k].Add(bodyDisConGroups[k][i] + new uint2(disConsOffset));
+                distanceConGroups[k].Add(bodyDisConGroups[k][i] + new int2(disConsOffset));
 
             // Add distance constraints
             for (int i = 0; i < bodyDisConstraints[k].Count; i++)
@@ -608,13 +608,13 @@ public class JobPhysicsSolver : MonoBehaviour
         verticesTriLinear = new NativeList<VertexTriLinear>(Allocator.Persistent);
 
         // Initialise per-channel constraint lists
-        distanceConGroups = new NativeList<uint2>[8];
+        distanceConGroups = new NativeList<int2>[8];
         distanceConstraints = new NativeList<DistanceConstraint>[8];
         volumeConstraints = new NativeList<VolumeConstraint>[8];
 
         for (int i = 0; i < 8; i++)
         {
-            distanceConGroups[i] = new NativeList<uint2>(Allocator.Persistent);
+            distanceConGroups[i] = new NativeList<int2>(Allocator.Persistent);
             distanceConstraints[i] = new NativeList<DistanceConstraint>(Allocator.Persistent);
             volumeConstraints[i] = new NativeList<VolumeConstraint>(Allocator.Persistent);
         }

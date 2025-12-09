@@ -8,10 +8,10 @@ using UnityEngine.Rendering;
 #region Variables
 public class DistanceConstraintRef
 {
-    public uint2 pidx;
+    public int2 pidx;
     public float restLenght;
 
-    public DistanceConstraintRef(uint2 pidx, float restLenght)
+    public DistanceConstraintRef(int2 pidx, float restLenght)
     {
         this.pidx = pidx;
         this.restLenght = restLenght;
@@ -19,10 +19,10 @@ public class DistanceConstraintRef
 }
 public class VolumeConstraintRef
 {
-    public uint4 pidx;
+    public int4 pidx;
     public float restVolume;
 
-    public VolumeConstraintRef(uint4 pidx, float restVolume)
+    public VolumeConstraintRef(int4 pidx, float restVolume)
     {
         this.pidx = pidx;
         this.restVolume = restVolume;
@@ -30,24 +30,24 @@ public class VolumeConstraintRef
 }
 public class LatticeCell
 {
-    public uint cellID;
-    public uint[] latticeParticles;
-    public List<uint> meshVertices;
+    public int cellID;
+    public int[] latticeParticles;
+    public List<int> meshVertices;
 
-    public LatticeCell(uint cellID, uint[] latticeParticles)
+    public LatticeCell(int cellID, int[] latticeParticles)
     {
         this.cellID = cellID;
         this.latticeParticles = latticeParticles;
-        meshVertices = new List<uint>();
+        meshVertices = new List<int>();
     }
 }
 
 public struct VertexTriLinear
 {
-    public uint4 idx03, idx47;
+    public int4 idx03, idx47;
     public float3 triLinearValues;
 
-    public VertexTriLinear(uint4 idx03, uint4 idx47, float3 triLinearValues)
+    public VertexTriLinear(int4 idx03, int4 idx47, float3 triLinearValues)
     {
         this.idx03 = idx03;
         this.idx47 = idx47;
@@ -59,11 +59,10 @@ public class ObjectInstanceManager : MonoBehaviour
 {
     // Public object data
     [SerializeField] private Mesh collisionMesh;
-    [SerializeField] private uint3 latticeDimensions;
+    [SerializeField] private int3 latticeDimensions;
     [SerializeField] private float mass = 1;
     [SerializeField] private float distanceCompliance = 0;
     [SerializeField] private float volumeCompliance = 0;
-
 
     // Mesh data
     private Mesh mesh;
@@ -73,17 +72,17 @@ public class ObjectInstanceManager : MonoBehaviour
     // Lattice data
     private float3 latticeNegativeCorner;
     private float3 latticeLengths;
-    private Dictionary<uint, LatticeCell> latticeCells;
+    private Dictionary<int, LatticeCell> latticeCells;
 
     // Particle data
-    private uint3 particlesDimensions;
+    private int3 particlesDimensions;
     private List<float3> particles;
-    private Dictionary<uint, uint> particlesDictionary;
+    private Dictionary<int, int> particlesDictionary;
     private VertexTriLinear[] verticesTriLinear;
 
     // Constraint data
-    private HashSet<uint2> addedEdges; // Redundancy list
-    private List<uint2>[] distanceConGroups;
+    private HashSet<int2> addedEdges; // Redundancy list
+    private List<int2>[] distanceConGroups;
     private List<DistanceConstraintRef>[] distanceConstraints;
     private List<VolumeConstraintRef>[] volumeConstraints;
 #endregion
@@ -121,8 +120,8 @@ public class ObjectInstanceManager : MonoBehaviour
     private void InitConstraints()
     {
         // Distance constraints data
-        addedEdges = new HashSet<uint2>(); // for duplicate check
-        distanceConGroups = new List<uint2>[8];
+        addedEdges = new HashSet<int2>(); // for duplicate check
+        distanceConGroups = new List<int2>[8];
         distanceConstraints = new List<DistanceConstraintRef>[8];
 
         // Volume constraints data
@@ -131,7 +130,7 @@ public class ObjectInstanceManager : MonoBehaviour
         for (int i = 0; i < 8; i++)
         {
             // Distance constraints data
-            distanceConGroups[i] = new List<uint2>();
+            distanceConGroups[i] = new List<int2>();
             distanceConstraints[i] = new List<DistanceConstraintRef>();
 
             // Volume constraints data
@@ -142,8 +141,8 @@ public class ObjectInstanceManager : MonoBehaviour
     float EPSILON = 1e-4f;
     private void InitLatticeAndParticles()
     {
-        latticeDimensions = math.max(latticeDimensions, new uint3(1, 1, 1));
-        particlesDimensions = latticeDimensions + new uint3(1, 1, 1);
+        latticeDimensions = math.max(latticeDimensions, new int3(1, 1, 1));
+        particlesDimensions = latticeDimensions + new int3(1, 1, 1);
         latticeNegativeCorner = (float3)mesh.bounds.min - new float3(EPSILON, EPSILON, EPSILON);
         latticeLengths = (float3)mesh.bounds.size + new float3(2 * EPSILON, 2 * EPSILON, 2 * EPSILON);
         latticeLengths /= (float3)latticeDimensions;
@@ -151,9 +150,9 @@ public class ObjectInstanceManager : MonoBehaviour
         int numberOfCells = (int)(latticeDimensions.x * latticeDimensions.y * latticeDimensions.z);
         int numberOfParticles = (int)(particlesDimensions.x * particlesDimensions.y * particlesDimensions.z);
 
-        latticeCells = new Dictionary<uint, LatticeCell>(numberOfCells);
+        latticeCells = new Dictionary<int, LatticeCell>(numberOfCells);
         particles = new List<float3>(numberOfParticles);
-        particlesDictionary = new Dictionary<uint, uint>(numberOfParticles);
+        particlesDictionary = new Dictionary<int, int>(numberOfParticles);
     }
 #endregion
 
@@ -191,24 +190,24 @@ public class ObjectInstanceManager : MonoBehaviour
         {
             // Calculates the lattice cell of the current mesh vertex
             float3 positionInLattice = (float3)meshVertices[i] - latticeNegativeCorner;
-            uint3 negativeCorner = (uint3)(positionInLattice / latticeLengths);
-            uint cellID = to1D(negativeCorner, latticeDimensions);
+            int3 negativeCorner = (int3)(positionInLattice / latticeLengths);
+            int cellID = to1D(negativeCorner, latticeDimensions);
 
             // Try adding the containing cell
             AddLatticeCell(negativeCorner, cellID);
             // Update the containing cell
-            latticeCells[cellID].meshVertices.Add((uint)i);
+            latticeCells[cellID].meshVertices.Add(i);
 
             // Stores data for trilinear interpolation
             verticesTriLinear[i] = new VertexTriLinear(
-                new uint4(TryAddParticle(negativeCorner + new uint3(0, 0, 0)),
-                          TryAddParticle(negativeCorner + new uint3(1, 0, 0)),
-                          TryAddParticle(negativeCorner + new uint3(1, 1, 0)),
-                          TryAddParticle(negativeCorner + new uint3(0, 1, 0))), 
-                new uint4(TryAddParticle(negativeCorner + new uint3(0, 0, 1)),
-                          TryAddParticle(negativeCorner + new uint3(1, 0, 1)),
-                          TryAddParticle(negativeCorner + new uint3(1, 1, 1)),
-                          TryAddParticle(negativeCorner + new uint3(0, 1, 1))), 
+                new int4(TryAddParticle(negativeCorner + new int3(0, 0, 0)),
+                          TryAddParticle(negativeCorner + new int3(1, 0, 0)),
+                          TryAddParticle(negativeCorner + new int3(1, 1, 0)),
+                          TryAddParticle(negativeCorner + new int3(0, 1, 0))),
+                new int4(TryAddParticle(negativeCorner + new int3(0, 0, 1)),
+                          TryAddParticle(negativeCorner + new int3(1, 0, 1)),
+                          TryAddParticle(negativeCorner + new int3(1, 1, 1)),
+                          TryAddParticle(negativeCorner + new int3(0, 1, 1))),
                 math.frac(positionInLattice / latticeLengths)
             );
         }
@@ -220,24 +219,24 @@ public class ObjectInstanceManager : MonoBehaviour
     /// Adds new cells, each newly added cell also has all of it's
     /// constraints added and indexed.
     /// </summary>
-    private void AddLatticeCell(uint3 negativeCorner, uint cellID)
+    private void AddLatticeCell(int3 negativeCorner, int cellID)
     {
         if (!latticeCells.ContainsKey(cellID))
         {
             // Adds particles in a specific order
-            uint[] pidx =
+            int[] pidx =
             {
-                TryAddParticle(negativeCorner + new uint3(0, 0, 0)), // 0
-                TryAddParticle(negativeCorner + new uint3(1, 0, 0)), // 1
-                TryAddParticle(negativeCorner + new uint3(1, 1, 0)), // 2
-                TryAddParticle(negativeCorner + new uint3(0, 1, 0)), // 3
-                TryAddParticle(negativeCorner + new uint3(0, 0, 1)), // 4
-                TryAddParticle(negativeCorner + new uint3(1, 0, 1)), // 5
-                TryAddParticle(negativeCorner + new uint3(1, 1, 1)), // 6
-                TryAddParticle(negativeCorner + new uint3(0, 1, 1)), // 7
+                TryAddParticle(negativeCorner + new int3(0, 0, 0)), // 0
+                TryAddParticle(negativeCorner + new int3(1, 0, 0)), // 1
+                TryAddParticle(negativeCorner + new int3(1, 1, 0)), // 2
+                TryAddParticle(negativeCorner + new int3(0, 1, 0)), // 3
+                TryAddParticle(negativeCorner + new int3(0, 0, 1)), // 4
+                TryAddParticle(negativeCorner + new int3(1, 0, 1)), // 5
+                TryAddParticle(negativeCorner + new int3(1, 1, 1)), // 6
+                TryAddParticle(negativeCorner + new int3(0, 1, 1)), // 7
             };
 
-            uint cellParity = negativeCorner.x%2 + negativeCorner.y%2 * 2 + negativeCorner.z%2 * 4;
+            int cellParity = negativeCorner.x%2 + negativeCorner.y%2 * 2 + negativeCorner.z%2 * 4;
             
             AddDistanceConstraints(pidx, cellParity);
             AddVolumeConstraints(pidx, cellParity);
@@ -250,40 +249,40 @@ public class ObjectInstanceManager : MonoBehaviour
     /// <summary>
     /// Returns the index of the present or newly added vertex.
     /// </summary>
-    private uint TryAddParticle(uint3 position)
+    private int TryAddParticle(int3 position)
     {
-        uint particleIndex = to1D(position, particlesDimensions);
+        int particleIndex = to1D(position, particlesDimensions);
         
-        if (particlesDictionary.TryGetValue(particleIndex, out uint index)) return index;
+        if (particlesDictionary.TryGetValue(particleIndex, out int index)) return index;
 
-        particlesDictionary.Add(particleIndex, (uint)particles.Count);
+        particlesDictionary.Add(particleIndex, particles.Count);
         particles.Add(latticeNegativeCorner + position * latticeLengths);
-        return (uint)particles.Count - 1;
+        return particles.Count - 1;
     }
 
-    private void AddDistanceConstraints(uint[] pidx, uint cellParity)
+    private void AddDistanceConstraints(int[] pidx, int cellParity)
     {
-        uint initDisCount, disCount;
-        initDisCount = disCount = (uint)distanceConstraints[cellParity].Count;
+        int initDisCount, disCount;
+        initDisCount = disCount = distanceConstraints[cellParity].Count;
         for (int x = 0; x < 8; x++)
         {
             for (int y = x+1; y < 8; y++)
             {
-                uint2 edge = new uint2(pidx[x], pidx[y]);
+                int2 edge = new int2(pidx[x], pidx[y]);
 
                 if (addedEdges.Contains(edge) || addedEdges.Contains(edge.yx)) continue;
 
                 addedEdges.Add(edge);
                 disCount++;
                 distanceConstraints[cellParity].Add(new DistanceConstraintRef(edge, 
-                    math.distance(transform.TransformPoint(particles[(int)edge.x]), 
-                                transform.TransformPoint(particles[(int)edge.y]))));
+                    math.distance(transform.TransformPoint(particles[edge.x]), 
+                                transform.TransformPoint(particles[edge.y]))));
             }
         }
-        distanceConGroups[cellParity].Add(new uint2(initDisCount, disCount));
+        distanceConGroups[cellParity].Add(new int2(initDisCount, disCount));
     }
 
-    private void AddVolumeConstraints(uint[] pidx, uint cellParity)
+    private void AddVolumeConstraints(int[] pidx, int cellParity)
     {
         int[,] tetrahedra = new int[,]
         {
@@ -292,10 +291,10 @@ public class ObjectInstanceManager : MonoBehaviour
 
         for (int i = 0; i < 5; i++)
         {
-            int p0 = (int)pidx[tetrahedra[i, 0]];
-            int p1 = (int)pidx[tetrahedra[i, 1]];
-            int p2 = (int)pidx[tetrahedra[i, 2]];
-            int p3 = (int)pidx[tetrahedra[i, 3]];
+            int p0 = pidx[tetrahedra[i, 0]];
+            int p1 = pidx[tetrahedra[i, 1]];
+            int p2 = pidx[tetrahedra[i, 2]];
+            int p3 = pidx[tetrahedra[i, 3]];
 
             float volume = math.dot(
                 transform.TransformPoint(particles[p1]) - transform.TransformPoint(particles[p0]), 
@@ -304,7 +303,7 @@ public class ObjectInstanceManager : MonoBehaviour
             ) / 6f;
             // Debug.Log($"Tetra {i} volume = {volume}");
 
-            volumeConstraints[cellParity].Add(new VolumeConstraintRef(new uint4((uint)p0, (uint)p1, (uint)p2, (uint)p3), volume));
+            volumeConstraints[cellParity].Add(new VolumeConstraintRef(new int4(p0, p1, p2, p3), volume));
         }
     }
 #endregion
@@ -330,10 +329,10 @@ public class ObjectInstanceManager : MonoBehaviour
         float3 randDir = math.normalize(UnityEngine.Random.insideUnitSphere);
 
         // Loops through each cell and only checks those that were not added already
-        for (uint cellID = 0; cellID < numberOfCells; cellID++)
+        for (int cellID = 0; cellID < numberOfCells; cellID++)
         {
             if (latticeCells.ContainsKey(cellID)) continue;
-            uint3 negativeCorner = to3D(cellID);
+            int3 negativeCorner = to3D(cellID);
             float3 negativeCornerPos = latticeNegativeCorner + negativeCorner * latticeLengths;
 
             edgeHits.Clear();
@@ -484,14 +483,14 @@ public class ObjectInstanceManager : MonoBehaviour
 #endregion
 
 #region Helper functions
-    public uint to1D(uint3 pos, uint3 dimensions)
+    public int to1D(int3 pos, int3 dimensions)
     {
         return (pos.z * dimensions.x * dimensions.y) + (pos.y * dimensions.x) + pos.x;
     }
 
-    public uint3 to3D(uint idx)
+    public int3 to3D(int idx)
     {
-        uint3 result = uint3.zero;
+        int3 result = int3.zero;
         result.z = idx / (latticeDimensions.x * latticeDimensions.y);
         idx -= result.z * latticeDimensions.x * latticeDimensions.y;
         result.y = idx / latticeDimensions.x;
@@ -527,12 +526,12 @@ public class ObjectInstanceManager : MonoBehaviour
             if (f == 5) Gizmos.color = Color.blue;
             if (f == 6) Gizmos.color = Color.magenta;
             if (f == 7) Gizmos.color = Color.white;
-            for (uint g = 0; g < distanceConGroups[f].Count; g++)
+            for (int g = 0; g < distanceConGroups[f].Count; g++)
             {
-                for (uint i = distanceConGroups[f][(int)g].x; i < distanceConGroups[f][(int)g].y; i++)
+                for (int i = distanceConGroups[f][g].x; i < distanceConGroups[f][g].y; i++)
                 {
-                    Vector3 lineStart = particles[(int)distanceConstraints[f][(int)i].pidx.x];
-                    Vector3 lineEnd = particles[(int)distanceConstraints[f][(int)i].pidx.y];
+                    Vector3 lineStart = particles[distanceConstraints[f][i].pidx.x];
+                    Vector3 lineEnd = particles[distanceConstraints[f][i].pidx.y];
 
                     Gizmos.DrawLine(lineStart, lineEnd);
                 }
