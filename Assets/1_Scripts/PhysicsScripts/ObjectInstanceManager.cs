@@ -42,6 +42,21 @@ public struct VertexTriLinear
         this.triLinearValues = triLinearValues;
     }
 }
+
+public struct CollisionVertex
+{
+    public int4 idx03, idx47;
+    public float3 triLinearValues;
+    public float invMass;
+
+    public CollisionVertex(int4 idx03, int4 idx47, float3 triLinearValues, float invMass)
+    {
+        this.idx03 = idx03;
+        this.idx47 = idx47;
+        this.triLinearValues = triLinearValues;
+        this.invMass = invMass;
+    }
+}
 #endregion
 
 #region Variables
@@ -84,6 +99,10 @@ public class ObjectInstanceManager : MonoBehaviour
     private List<int2>[] distanceConGroups;
     private List<DistanceConstraintRef>[] distanceConstraints;
     private List<VolumeConstraintRef>[] volumeConstraints;
+
+    // Collision mesh data
+    private CollisionVertex[] collisionVertices;
+    private int[] collisionTriangles;
 #endregion
 
 #region Initialisation
@@ -354,6 +373,7 @@ public class ObjectInstanceManager : MonoBehaviour
             TestSubLatticeCells(minBB, maxBB, v0, v1, v2);
         }
 
+
         // Add cells that are inside using flood fill for speed
         // Hash set for casses where it hits an edge of the triangle
         HashSet<int> edgeHits = new HashSet<int>();
@@ -366,8 +386,14 @@ public class ObjectInstanceManager : MonoBehaviour
         // Sub lattice flood fill
         FillSubLattice(colMeshVerts, colMeshTris, edgeHits, queue);
 
-        // Disperses mass on the sub lattice
+        // Create collision mesh data
+        // Disperses mass and creates the collision vertices
         DisperseSubLatticeMass(colMeshVerts);
+
+        // Assign triangles
+        collisionTriangles = colMeshTris;
+
+        
     }
 
 #region Triangle Case
@@ -584,6 +610,7 @@ public class ObjectInstanceManager : MonoBehaviour
     /// Disperses the mass on the populated sub lattice cells.
     /// A populated cell is one in which at least one collision vertex is present.
     /// Runs flood fill to disperse the whole lattice.
+    /// And creates the collision vertices list.
     /// </summary>
     private void DisperseSubLatticeMass(Vector3[] colMeshVerts)
     {
@@ -643,7 +670,39 @@ public class ObjectInstanceManager : MonoBehaviour
             TryFloodAndIncrementCell(currentCell, cellCoords, 2, true, massQueue);
         }
 
-        Debug.Log(activeSubCellCount);
+        // Mass of each sub cell
+        float subCellMass = mass / activeSubCellCount;
+        
+        collisionVertices = new CollisionVertex[colMeshVerts.Length];
+
+        // Loop though each collision vertex add trilinear values and calculate mass
+        for (int i = 0; i < colMeshVerts.Length; i++)
+        {
+            // position in main lattice
+            float3 posInMainLattice = (float3)colMeshVerts[i] - latticeNegativeCorner;
+            int3 mainNegativeCorner = (int3)(posInMainLattice / latticeLengths);
+
+            // position and cellID for the sub lattice
+            float3 posInSubLattice = (float3)colMeshVerts[i] - subLatticeNegativeCorner;
+            int3 negativeCorner = (int3)(posInSubLattice / subLatticeLenghts);
+            int subCellID = to1D(negativeCorner, subLatticeDimensions);
+
+            // Create new collision vertex with the trilinear based on main mesh
+            // and invMass based on sub mesh cell influence and how many other particles
+            // are in the same cell (massDivider)
+            collisionVertices[i] = new CollisionVertex(
+                new int4(TryAddParticle(mainNegativeCorner + new int3(0, 0, 0)),
+                          TryAddParticle(mainNegativeCorner + new int3(1, 0, 0)),
+                          TryAddParticle(mainNegativeCorner + new int3(1, 1, 0)),
+                          TryAddParticle(mainNegativeCorner + new int3(0, 1, 0))),
+                new int4(TryAddParticle(mainNegativeCorner + new int3(0, 0, 1)),
+                          TryAddParticle(mainNegativeCorner + new int3(1, 0, 1)),
+                          TryAddParticle(mainNegativeCorner + new int3(1, 1, 1)),
+                          TryAddParticle(mainNegativeCorner + new int3(0, 1, 1))),
+                math.frac(posInMainLattice / latticeLengths),
+                1f / (subLatticeCells[subCellID] * subCellMass / massDivider[i])
+            );
+        }
     }
 
     /// <summary>

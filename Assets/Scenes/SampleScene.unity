@@ -790,7 +790,7 @@ MonoBehaviour:
     x: 16
     y: 12
     z: 16
-  subLatticeMultiplier: 2
+  subLatticeMultiplier: 10
   mass: 67
   distanceCompliance: 0
   volumeCompliance: 0
