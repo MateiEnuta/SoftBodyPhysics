@@ -362,11 +362,15 @@ public class ObjectInstanceManager : MonoBehaviour
         Queue<int> queue = new Queue<int>(subLatticeCount * (1/8));
 
         // Main lattice flood fill
-        MainLatticeInsideChecks(colMeshVerts, colMeshTris, edgeHits, queue);
+        FillMainLattice(colMeshVerts, colMeshTris, edgeHits, queue);
         // Sub lattice flood fill
-        SubLatticeInsideChecks(colMeshVerts, colMeshTris, edgeHits, queue);
+        FillSubLattice(colMeshVerts, colMeshTris, edgeHits, queue);
+
+        // Disperses mass on the sub lattice
+        DisperseSubLatticeMass(colMeshVerts);
     }
 
+#region Triangle Case
     /// <summary>
     /// Tests which cells the triangle actually intesects
     /// with the main lattice and adds them if they do intersect.
@@ -453,11 +457,13 @@ public class ObjectInstanceManager : MonoBehaviour
             return false;
         return true;
     }
+#endregion
 
+#region Inside Case
     /// <summary>
     /// Fills the main lattice.
     /// </summary>
-    private void MainLatticeInsideChecks(Vector3[] colMeshVerts, int[] colMeshTris,
+    private void FillMainLattice(Vector3[] colMeshVerts, int[] colMeshTris,
             HashSet<int> edgeHits, Queue<int> queue)
     {
         for (int i = 0; i < latticeCount; i++)
@@ -491,7 +497,7 @@ public class ObjectInstanceManager : MonoBehaviour
     /// <summary>
     /// Fills the sub lattice.
     /// </summary>
-    private void SubLatticeInsideChecks(Vector3[] colMeshVerts, int[] colMeshTris,
+    private void FillSubLattice(Vector3[] colMeshVerts, int[] colMeshTris,
             HashSet<int> edgeHits, Queue<int> queue)
     {
         for (int i = 0; i < subLatticeCount; i++)
@@ -520,44 +526,6 @@ public class ObjectInstanceManager : MonoBehaviour
                 FloodFillCells(queue, false, false);
             }
         }
-    }
-
-    /// <summary>
-    /// Checks if a given point is inside the given mesh.
-    /// Uses ray intersection test with a way to detect edge hits.
-    /// </summary>
-    private bool IsPointInsideMesh(float3 point, HashSet<int> edgeHits, Vector3[] colMeshVerts, int[] colMeshTris)
-    {
-        edgeHits.Clear();
-        int intersections = 0;
-        float3 randDir = math.normalize(UnityEngine.Random.insideUnitSphere);
-
-        // Loops through the triangles of the mesh collider and checks for intersections
-        for (int i = 0; i < colMeshTris.Length; i+=3)
-        {
-            float3 v0 = colMeshVerts[colMeshTris[i]];
-            float3 v1 = colMeshVerts[colMeshTris[i+1]];
-            float3 v2 = colMeshVerts[colMeshTris[i+2]];
-
-            // Main check for casses where the cell is completly inside the collider mesh
-            float result = RayIntersectsTriangleDetailed(point, randDir, v0, v1, v2);
-            if (result == -2f) intersections++;
-            else if (result > 0)
-            {
-                // In case of an edge hit, indexes it with some kind of accuracy
-                // and checks if it was already added and if so counts that as an intersection
-                int key = Mathf.RoundToInt(result * 100000f);
-                if (!edgeHits.Add(key))
-                {
-                    edgeHits.Remove(key);
-                    intersections++;
-                }
-            }
-        }
-
-        // Test fail condition, either outside or interected with the mesh
-        if (intersections % 2 == 0) return false;
-        return true;
     }
 
     /// <summary>
@@ -609,6 +577,99 @@ public class ObjectInstanceManager : MonoBehaviour
             }
         }
     }
+#endregion
+
+#region Mass dispersion
+    /// <summary>
+    /// Disperses the mass on the populated sub lattice cells.
+    /// A populated cell is one in which at least one collision vertex is present.
+    /// Runs flood fill to disperse the whole lattice.
+    /// </summary>
+    private void DisperseSubLatticeMass(Vector3[] colMeshVerts)
+    {
+        // Queue for setting sub lattice cell influence
+        Queue<int2> massQueue = new Queue<int2>(subLatticeCount * (1/8));
+
+        // For cases where 2 collision vertices are in the same sub cell
+        int[] massDivider = new int[colMeshVerts.Length];
+
+        // Loop though each particle and enqueue their values
+        for (int i = 0; i < colMeshVerts.Length; i++)
+        {
+            float3 posInSubLattice = (float3)colMeshVerts[i] - subLatticeNegativeCorner;
+            int3 negativeCorner = (int3)(posInSubLattice / subLatticeLenghts);
+            int cellID = to1D(negativeCorner, subLatticeDimensions);
+
+            // Check if the cellID is empty
+            if (subLatticeCells[cellID] == 0)
+            {
+                massDivider[i] = 1;
+                subLatticeCells[cellID] = 1;
+                massQueue.Enqueue(new int2(cellID, cellID));
+            }
+            else
+            {
+                // If not then loop though the particles until now and update them if they share the same cell
+                for (int j = 0; j < i; j++)
+                {
+                    float3 secPosInSubLattice = (float3)colMeshVerts[j] - subLatticeNegativeCorner;
+                    int3 secNegativeCorner = (int3)(secPosInSubLattice / subLatticeLenghts);
+                    int secCellID = to1D(secNegativeCorner, subLatticeDimensions);
+
+                    // Increment if the secondary ID is the same
+                    if (cellID == secCellID) {
+                        massDivider[j]++;
+                        massDivider[i] = massDivider[j];
+                    }
+                }
+            }
+        }
+
+        // Number of active sub cells, used for even distribution
+        int activeSubCellCount = 0;
+
+        // Flood fill with incrementing of the starting cell
+        while (massQueue.Count > 0)
+        {
+            activeSubCellCount++;
+            int2 currentCell = massQueue.Dequeue();
+            int3 cellCoords = to3D(currentCell.x, subLatticeDimensions);
+
+            TryFloodAndIncrementCell(currentCell, cellCoords, 0, false, massQueue);
+            TryFloodAndIncrementCell(currentCell, cellCoords, 0, true, massQueue);
+            TryFloodAndIncrementCell(currentCell, cellCoords, 1, false, massQueue);
+            TryFloodAndIncrementCell(currentCell, cellCoords, 1, true, massQueue);
+            TryFloodAndIncrementCell(currentCell, cellCoords, 2, false, massQueue);
+            TryFloodAndIncrementCell(currentCell, cellCoords, 2, true, massQueue);
+        }
+
+        Debug.Log(activeSubCellCount);
+    }
+
+    /// <summary>
+    /// Tries flood filing the given adjacent cell, if it succed it would also increment
+    /// the starting cell influence.
+    /// </summary>
+    private void TryFloodAndIncrementCell(int2 currentCell, int3 cellCoords, int axis, bool sign, Queue<int2> massQueue)
+    {
+        if (cellCoords[axis] + (sign ? 1 : -1) < subLatticeDimensions[axis]
+            && cellCoords[axis] + (sign ? 1 : -1) >= 0)
+        {
+            int3 addition = int3.zero;
+            addition[axis] = sign ? 1 : -1;
+            int3 nextCellCords = cellCoords + addition;
+            int nextCellID = to1D(nextCellCords, subLatticeDimensions);
+
+            if (subLatticeCells[nextCellID] == 0)
+            {
+                subLatticeCells[nextCellID] = -1;
+                massQueue.Enqueue(new int2(nextCellID, currentCell.y));
+                subLatticeCells[currentCell.y]++;
+            }
+        }
+    }
+#endregion
+
 #endregion
 
 #region Clean up
@@ -729,6 +790,44 @@ public class ObjectInstanceManager : MonoBehaviour
     }
 
     /// <summary>
+    /// Checks if a given point is inside the given mesh.
+    /// Uses ray intersection test with a way to detect edge hits.
+    /// </summary>
+    private bool IsPointInsideMesh(float3 point, HashSet<int> edgeHits, Vector3[] colMeshVerts, int[] colMeshTris)
+    {
+        edgeHits.Clear();
+        int intersections = 0;
+        float3 randDir = math.normalize(UnityEngine.Random.insideUnitSphere);
+
+        // Loops through the triangles of the mesh collider and checks for intersections
+        for (int i = 0; i < colMeshTris.Length; i+=3)
+        {
+            float3 v0 = colMeshVerts[colMeshTris[i]];
+            float3 v1 = colMeshVerts[colMeshTris[i+1]];
+            float3 v2 = colMeshVerts[colMeshTris[i+2]];
+
+            // Main check for casses where the cell is completly inside the collider mesh
+            float result = RayIntersectsTriangleDetailed(point, randDir, v0, v1, v2);
+            if (result == -2f) intersections++;
+            else if (result > 0)
+            {
+                // In case of an edge hit, indexes it with some kind of accuracy
+                // and checks if it was already added and if so counts that as an intersection
+                int key = Mathf.RoundToInt(result * 100000f);
+                if (!edgeHits.Add(key))
+                {
+                    edgeHits.Remove(key);
+                    intersections++;
+                }
+            }
+        }
+
+        // Test fail condition, either outside or interected with the mesh
+        if (intersections % 2 == 0) return false;
+        return true;
+    }
+
+    /// <summary>
     /// Performs ray-triangle intersection using the Möller–Trumbore algorithm.
     /// Returns:
     /// - -1f if there is no intersection,
@@ -759,6 +858,35 @@ public class ObjectInstanceManager : MonoBehaviour
             return t;
 
         return -2f;
+    }
+
+    /// <summary>
+    /// Tests if any edge of the cell intersects the given triangle.
+    /// </summary>
+    private bool CellEdgesIntersectsTri(float3 negativeCornerPos, float3 v0, float3 v1, float3 v2)
+    {
+        float3 t0 = negativeCornerPos;
+        float3 t1 = negativeCornerPos + latticeLengths * new float3(1, 0, 0);
+        float3 t2 = negativeCornerPos + latticeLengths * new float3(1, 1, 0);
+        float3 t3 = negativeCornerPos + latticeLengths * new float3(0, 1, 0);
+        float3 t4 = negativeCornerPos + latticeLengths * new float3(0, 0, 1);
+        float3 t5 = negativeCornerPos + latticeLengths * new float3(1, 0, 1);
+        float3 t6 = negativeCornerPos + latticeLengths * new float3(1, 1, 1);
+        float3 t7 = negativeCornerPos + latticeLengths * new float3(0, 1, 1);
+
+        if (LineSegmentIntersectsTriangle(t0, t1, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t0, t3, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t0, t4, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t2, t1, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t2, t3, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t2, t6, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t5, t1, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t5, t4, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t5, t6, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t7, t6, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t7, t4, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t7, t3, v0, v1, v2)) return true;
+        return false;
     }
 
     /// <summary>
@@ -795,45 +923,21 @@ public class ObjectInstanceManager : MonoBehaviour
         return true;
     }
 
-    private bool CellEdgesIntersectsTri(float3 negativeCornerPos, float3 v0, float3 v1, float3 v2)
-    {
-        float3 t0 = negativeCornerPos;
-        float3 t1 = negativeCornerPos + latticeLengths * new float3(1, 0, 0);
-        float3 t2 = negativeCornerPos + latticeLengths * new float3(1, 1, 0);
-        float3 t3 = negativeCornerPos + latticeLengths * new float3(0, 1, 0);
-        float3 t4 = negativeCornerPos + latticeLengths * new float3(0, 0, 1);
-        float3 t5 = negativeCornerPos + latticeLengths * new float3(1, 0, 1);
-        float3 t6 = negativeCornerPos + latticeLengths * new float3(1, 1, 1);
-        float3 t7 = negativeCornerPos + latticeLengths * new float3(0, 1, 1);
-
-        if (LineSegmentIntersectsTriangle(t0, t1, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t0, t3, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t0, t4, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t2, t1, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t2, t3, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t2, t6, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t5, t1, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t5, t4, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t5, t6, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t7, t6, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t7, t4, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t7, t3, v0, v1, v2)) return true;
-        return false;
-    }
-
+#region Debug
     private void OnDrawGizmosSelected()
     {
         if (mesh == null) return;
 
         // Gizmos.color = Color.green;
-        // for (int x = 0; x < latticeDimensions.x; x++)
+        // for (int x = 0; x < subLatticeDimensions.x; x++)
         // {
-        //     for (int y = 0; y < latticeDimensions.y; y++)
+        //     for (int y = 0; y < subLatticeDimensions.y; y++)
         //     {
-        //         for (int z = 0; z < latticeDimensions.z; z++)
+        //         for (int z = 0; z < subLatticeDimensions.z; z++)
         //         {
-        //             float3 cellCenter = latticeNegativeCorner + new float3(x + 0.5f, y + 0.5f, z + 0.5f) * latticeLengths;
-        //             Gizmos.DrawWireCube(cellCenter, latticeLengths);
+        //             if (subLatticeCells[to1D(new int3(x, y, z), subLatticeDimensions)] != 1) continue;
+        //             float3 cellCenter = subLatticeNegativeCorner + new float3(x + 0.5f, y + 0.5f, z + 0.5f) * subLatticeLenghts;
+        //             Gizmos.DrawWireCube(cellCenter, subLatticeLenghts);
         //         }
         //     }
         // }
@@ -860,5 +964,6 @@ public class ObjectInstanceManager : MonoBehaviour
             }
         }
     }
+#endregion
 #endregion
 }

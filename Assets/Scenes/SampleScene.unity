@@ -785,12 +785,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 0cc8008def44f4bc9ad97438653554d4, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ObjectInstanceManager
-  collisionMesh: {fileID: 2534964839176971238, guid: 173c464fa5d114ef38eb42719d177bed, type: 3}
+  collisionMesh: {fileID: 1969245583746928691, guid: 22126b7ccf9d3b14580eeebc7a42bd64, type: 3}
   latticeDimensions:
     x: 16
     y: 12
     z: 16
-  subLatticeMultiplier: 4
+  subLatticeMultiplier: 2
   mass: 67
   distanceCompliance: 0
   volumeCompliance: 0
