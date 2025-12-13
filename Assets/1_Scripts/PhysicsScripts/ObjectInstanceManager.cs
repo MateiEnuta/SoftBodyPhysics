@@ -5,8 +5,8 @@ using Unity.Mathematics;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-#region Variables
-public class DistanceConstraintRef
+#region Structs
+public struct DistanceConstraintRef
 {
     public int2 pidx;
     public float restLenght;
@@ -17,7 +17,7 @@ public class DistanceConstraintRef
         this.restLenght = restLenght;
     }
 }
-public class VolumeConstraintRef
+public struct VolumeConstraintRef
 {
     public int4 pidx;
     public float restVolume;
@@ -28,7 +28,7 @@ public class VolumeConstraintRef
         this.restVolume = restVolume;
     }
 }
-public class LatticeCell
+public struct LatticeCell
 {
     public int cellID;
     public int[] latticeParticles;
@@ -54,12 +54,15 @@ public struct VertexTriLinear
         this.triLinearValues = triLinearValues;
     }
 }
+#endregion
 
+#region Variables
 public class ObjectInstanceManager : MonoBehaviour
 {
     // Public object data
     [SerializeField] private Mesh collisionMesh;
     [SerializeField] private int3 latticeDimensions;
+    [SerializeField] private int3 subLatticeDimensions;
     [SerializeField] private float mass = 1;
     [SerializeField] private float distanceCompliance = 0;
     [SerializeField] private float volumeCompliance = 0;
@@ -70,9 +73,12 @@ public class ObjectInstanceManager : MonoBehaviour
     private Vector3[] meshVertices;
 
     // Lattice data
+    private Dictionary<int, LatticeCell> latticeCells;
     private float3 latticeNegativeCorner;
     private float3 latticeLengths;
-    private Dictionary<int, LatticeCell> latticeCells;
+    private HashSet<int> subLatticeCells;
+    private float3 subLatticeNegativeCorner;
+    private float3 subLatticeLenghts;
 
     // Particle data
     private int3 particlesDimensions;
@@ -142,21 +148,29 @@ public class ObjectInstanceManager : MonoBehaviour
     private void InitLatticeAndParticles()
     {
         latticeDimensions = math.max(latticeDimensions, new int3(1, 1, 1));
-        particlesDimensions = latticeDimensions + new int3(1, 1, 1);
         latticeNegativeCorner = (float3)mesh.bounds.min - new float3(EPSILON, EPSILON, EPSILON);
         latticeLengths = (float3)mesh.bounds.size + new float3(2 * EPSILON, 2 * EPSILON, 2 * EPSILON);
         latticeLengths /= (float3)latticeDimensions;
 
+        particlesDimensions = latticeDimensions + new int3(1, 1, 1);
+
+        subLatticeDimensions = math.max(subLatticeDimensions, new int3(1, 1, 1));
+        subLatticeNegativeCorner = (float3)mesh.bounds.min - new float3(EPSILON, EPSILON, EPSILON);
+        subLatticeLenghts = (float3)mesh.bounds.size + new float3(2 * EPSILON, 2 * EPSILON, 2 * EPSILON);
+        subLatticeLenghts /= (float3)subLatticeDimensions;
+
         int numberOfCells = (int)(latticeDimensions.x * latticeDimensions.y * latticeDimensions.z);
         int numberOfParticles = (int)(particlesDimensions.x * particlesDimensions.y * particlesDimensions.z);
+        int numberOfSubCells = (int)(subLatticeDimensions.x * subLatticeDimensions.y * subLatticeDimensions.z);
 
         latticeCells = new Dictionary<int, LatticeCell>(numberOfCells);
         particles = new List<float3>(numberOfParticles);
         particlesDictionary = new Dictionary<int, int>(numberOfParticles);
+        subLatticeCells = new HashSet<int>(numberOfSubCells);
     }
 #endregion
 
-#region Solver communitcation
+#region Solver addition
 
     public void UploadDataToSolver()
     {
@@ -308,7 +322,7 @@ public class ObjectInstanceManager : MonoBehaviour
     }
 #endregion
 
-#region Collision shape addition
+#region Collision shape
     /// <summary>
     /// Loops though cells that were not added yet and checks
     /// if they either intersect the collision mesh or fully
@@ -321,58 +335,266 @@ public class ObjectInstanceManager : MonoBehaviour
         if (collisionMesh == null) return;
         Vector3[] colMeshVerts = collisionMesh.vertices;
         int[] colMeshTris = collisionMesh.triangles;
-        // Hash set for casses where it hits an edge of the triangle
-        HashSet<int> edgeHits = new HashSet<int>();
 
-        int numberOfCells = (int)(latticeDimensions.x * latticeDimensions.y * latticeDimensions.z);
-        // A random direction for avoiding hitting a triangle on the edges
-        float3 randDir = math.normalize(UnityEngine.Random.insideUnitSphere);
-
-        // Loops through each cell and only checks those that were not added already
-        for (int cellID = 0; cellID < numberOfCells; cellID++)
+        for (int i = 0; i < colMeshTris.Length; i+=3)
         {
-            if (latticeCells.ContainsKey(cellID)) continue;
-            int3 negativeCorner = to3D(cellID);
-            float3 negativeCornerPos = latticeNegativeCorner + negativeCorner * latticeLengths;
+            float3 v0 = colMeshVerts[colMeshTris[i]];
+            float3 v1 = colMeshVerts[colMeshTris[i+1]];
+            float3 v2 = colMeshVerts[colMeshTris[i+2]];
 
-            edgeHits.Clear();
-            int intersections = 0;
+            float3 minBB = new float3(
+                v0.x < (v1.x < v2.x ? v1.x : v2.x) ? v0.x : (v1.x < v2.x ? v1.x : v2.x),
+                v0.y < (v1.y < v2.y ? v1.y : v2.y) ? v0.y : (v1.y < v2.y ? v1.y : v2.y),
+                v0.z < (v1.z < v2.z ? v1.z : v2.z) ? v0.z : (v1.z < v2.z ? v1.z : v2.z)
+            );
+            float3 maxBB = new float3(
+                v0.x > (v1.x > v2.x ? v1.x : v2.x) ? v0.x : (v1.x > v2.x ? v1.x : v2.x),
+                v0.y > (v1.y > v2.y ? v1.y : v2.y) ? v0.y : (v1.y > v2.y ? v1.y : v2.y),
+                v0.z > (v1.z > v2.z ? v1.z : v2.z) ? v0.z : (v1.z > v2.z ? v1.z : v2.z)
+            );
 
-            // Loops through the triangles of the mesh collider and checks for intersections
-            for (int i = 0; i < colMeshTris.Length; i+=3)
+            // Main lattice tests
+            TestMainLatticeCells(minBB, maxBB, v0, v1, v2);
+            // Sub lattice tests
+            TestSubLatticeCells(minBB, maxBB, v0, v1, v2);
+        }
+
+        // // Hash set for casses where it hits an edge of the triangle
+        // HashSet<int> edgeHits = new HashSet<int>();
+
+        // int numberOfCells = (int)(latticeDimensions.x * latticeDimensions.y * latticeDimensions.z);
+        // // A random direction for avoiding hitting a triangle on the edges
+        // float3 randDir = math.normalize(UnityEngine.Random.insideUnitSphere);
+
+        // // Loops through each cell and only checks those that were not added already
+        // for (int cellID = 0; cellID < numberOfCells; cellID++)
+        // {
+        //     if (latticeCells.ContainsKey(cellID)) continue;
+        //     int3 negativeCorner = to3D(cellID, latticeDimensions);
+        //     float3 negativeCornerPos = latticeNegativeCorner + negativeCorner * latticeLengths;
+
+        //     edgeHits.Clear();
+        //     int intersections = 0;
+
+        //     // Loops through the triangles of the mesh collider and checks for intersections
+        //     for (int i = 0; i < colMeshTris.Length; i+=3)
+        //     {
+        //         float3 v0 = colMeshVerts[colMeshTris[i]];
+        //         float3 v1 = colMeshVerts[colMeshTris[i+1]];
+        //         float3 v2 = colMeshVerts[colMeshTris[i+2]];
+
+        //         // Main check for casses where the cell is completly inside the collider mesh
+        //         float result = RayIntersectsTriangleDetailed(negativeCornerPos, randDir, v0, v1, v2);
+        //         if (result == -2f) intersections++;
+        //         else if (result > 0)
+        //         {
+        //             // In case of an edge hit, indexes it with some kind of accuracy
+        //             // and checks if it was already added and if so counts that as an intersection
+        //             int key = Mathf.RoundToInt(result * 100000f);
+        //             if (!edgeHits.Add(key))
+        //             {
+        //                 edgeHits.Remove(key);
+        //                 intersections++;
+        //             }
+        //         }
+
+        //         // Secundary check where the cell collides with the mesh but not inside of it
+        //         if (TriangleIntersectsCell(negativeCornerPos, latticeLengths, v0, v1, v2))
+        //         {
+        //             intersections = 1;
+        //             break;
+        //         }
+        //     }
+
+        //     // Test fail condition, either outside or interected with the mesh
+        //     if (intersections % 2 == 0) continue;
+
+        //     AddLatticeCell(negativeCorner, cellID);
+        // }
+    }
+
+    private void TestMainLatticeCells(float3 minBB, float3 maxBB, float3 a, float3 b, float3 c)
+    {
+        float3 minPosInLattice = minBB - latticeNegativeCorner;
+        int3 minNegativeCorner = (int3)(minPosInLattice / latticeLengths);
+
+        float3 maxPosInLattice = maxBB - latticeNegativeCorner;
+        int3 maxNegativeCorner = (int3)(maxPosInLattice / latticeLengths);
+
+        for (int x = minNegativeCorner.x; x <= maxNegativeCorner.x; x++)
+        {
+            for (int y = minNegativeCorner.y; y <= maxNegativeCorner.y; y++)
             {
-                float3 v0 = colMeshVerts[colMeshTris[i]];
-                float3 v1 = colMeshVerts[colMeshTris[i+1]];
-                float3 v2 = colMeshVerts[colMeshTris[i+2]];
-
-                // Main check for casses where the cell is completly inside the collider mesh
-                float result = RayIntersectsTriangleDetailed(negativeCornerPos, randDir, v0, v1, v2);
-                if (result == -2f) intersections++;
-                else if (result > 0)
+                for (int z = minNegativeCorner.z; z <= maxNegativeCorner.z; z++)
                 {
-                    // In case of an edge hit, indexes it with some kind of accuracy
-                    // and checks if it was already added and if so counts that as an intersection
-                    int key = Mathf.RoundToInt(result * 100000f);
-                    if (!edgeHits.Add(key))
-                    {
-                        edgeHits.Remove(key);
-                        intersections++;
-                    }
-                }
+                    int3 cellCoords = new int3(x, y, z);
+                    int cellID = to1D(cellCoords, latticeDimensions);
+                    if (latticeCells.ContainsKey(cellID)) continue;
+                    if (!TriangleIntersectsCell(latticeNegativeCorner + cellCoords * latticeLengths, latticeLengths, a, b, c)) continue;
 
-                // Secundary check where the cell collides with the mesh but not inside of it
-                if (CellIntersectsTriangle(negativeCornerPos, v0, v1, v2))
-                {
-                    intersections = 1;
-                    break;
+                    AddLatticeCell(cellCoords, cellID);
                 }
             }
-
-            // Test fail condition, either outside or interected with the mesh
-            if (intersections % 2 == 0) continue;
-
-            AddLatticeCell(negativeCorner, cellID);
         }
+    }
+
+    private void TestSubLatticeCells(float3 minBB, float3 maxBB, float3 a, float3 b, float3 c)
+    {
+        float3 minPosInLattice = minBB - subLatticeNegativeCorner;
+        int3 minNegativeCorner = (int3)(minPosInLattice / subLatticeLenghts);
+
+        float3 maxPosInLattice = maxBB - subLatticeNegativeCorner;
+        int3 maxNegativeCorner = (int3)(maxPosInLattice / subLatticeLenghts);
+
+        for (int x = minNegativeCorner.x; x <= maxNegativeCorner.x; x++)
+        {
+            for (int y = minNegativeCorner.y; y <= maxNegativeCorner.y; y++)
+            {
+                for (int z = minNegativeCorner.z; z <= maxNegativeCorner.z; z++)
+                {
+                    int3 cellCoords = new int3(x, y, z);
+                    int cellID = to1D(cellCoords, subLatticeDimensions);
+                    if (subLatticeCells.Contains(cellID)) continue;
+                    if (!TriangleIntersectsCell(subLatticeNegativeCorner + subLatticeLenghts * cellCoords, subLatticeLenghts, a, b, c)) continue;
+
+                    subLatticeCells.Add(cellID);
+                }
+            }
+        }
+    }
+
+    private bool TriangleIntersectsCell(float3 cellNegativeCorner, float3 cellLenghts, 
+        float3 a, float3 b, float3 c)
+    {
+        float3 cellMiddle = cellNegativeCorner + cellLenghts * 0.5f;
+
+        float3 closestPoint = ClosestPointInTriangle(cellMiddle, a, b, c);
+
+        if (closestPoint.x > cellNegativeCorner.x + cellLenghts.x || closestPoint.x < cellNegativeCorner.x)
+            return false;
+        if (closestPoint.y > cellNegativeCorner.y + cellLenghts.y || closestPoint.y < cellNegativeCorner.y)
+            return false;
+        if (closestPoint.z > cellNegativeCorner.z + cellLenghts.z || closestPoint.z < cellNegativeCorner.z)
+            return false;
+        return true;
+    }
+#endregion
+
+#region Clean up
+    /// <summary>
+    /// Frees up memory.
+    /// </summary>
+    private void CleanUp()
+    {
+        addedEdges = null;
+        particlesDictionary = null;
+        meshVertices = null;
+        latticeCells = null;
+        subLatticeCells = null;
+    }
+#endregion
+
+#region Helper functions
+    public int to1D(int3 pos, int3 dimensions)
+    {
+        return (pos.z * dimensions.x * dimensions.y) + (pos.y * dimensions.x) + pos.x;
+    }
+
+    public int3 to3D(int idx, int3 dimensions)
+    {
+        int3 result = int3.zero;
+        result.z = idx / (dimensions.x * dimensions.y);
+        idx -= result.z * dimensions.x * dimensions.y;
+        result.y = idx / dimensions.x;
+        result.x = idx % dimensions.x;
+
+        return result;
+    }
+
+    /// <summary>
+    /// Finds the closest point on or inside a triangle to a given point in 3D space.
+    /// </summary>
+    /// <param name="point">The point to find the closest location for</param>
+    /// <param name="a">First vertex of the triangle</param>
+    /// <param name="b">Second vertex of the triangle</param>
+    /// <param name="c">Third vertex of the triangle</param>
+    /// <returns>The closest point inside or on the triangle</returns>
+    public static float3 ClosestPointInTriangle(float3 point, float3 a, float3 b, float3 c)
+    {
+        // Project point onto the triangle's plane
+        float3 ab = b - a;
+        float3 ac = c - a;
+        float3 ap = point - a;
+
+        float ab2   = math.dot(ab, ab);
+        float ac2   = math.dot(ac, ac);
+        float ab_ac = math.dot(ab, ac);
+        float ap_ab = math.dot(ap, ab);
+        float ap_ac = math.dot(ap, ac);
+
+        float denom = ab2 * ac2 - ab_ac * ab_ac;
+        float u = ac2 * ap_ab - ab_ac * ap_ac;
+        float v = ab2 * ap_ac - ab_ac * ap_ab;
+
+        // Check if point is inside the triangle
+        if (u >= 0 && v >= 0 && u + v <= denom)
+        {
+            // Point projects inside the triangle
+            u /= denom;
+            v /= denom;
+            return a + u * ab + v * ac;
+        }
+
+        // Point is outside, find closest point on the edges
+        float minDistSq = float.MaxValue;
+        float3 closestPoint = a;
+
+        // Check edge AB
+        float t = math.dot(ap, ab) / ab2;
+        t = Mathf.Clamp01(t);
+        float3 edgePoint = a + t * ab;
+        float distSq = Vector3.SqrMagnitude(point - edgePoint);
+        if (distSq < minDistSq)
+        {
+            minDistSq = distSq;
+            closestPoint = edgePoint;
+        }
+
+        // Check edge BC
+        float3 bc = c - b;
+        float3 bp = point - b;
+        t = math.dot(bp, bc) / math.dot(bc, bc);
+        t = Mathf.Clamp01(t);
+        edgePoint = b + t * bc;
+        distSq = Vector3.SqrMagnitude(point - edgePoint);
+        if (distSq < minDistSq)
+        {
+            minDistSq = distSq;
+            closestPoint = edgePoint;
+        }
+
+        // Check edge CA
+        float3 ca = a - c;
+        float3 cp = point - c;
+        t = math.dot(cp, ca) / math.dot(ca, ca);
+        t = Mathf.Clamp01(t);
+        edgePoint = c + t * ca;
+        distSq = Vector3.SqrMagnitude(point - edgePoint);
+        if (distSq < minDistSq)
+        {
+            minDistSq = distSq;
+            closestPoint = edgePoint;
+        }
+
+        // Check vertices
+        if (Vector3.SqrMagnitude(point - a) < minDistSq)
+            closestPoint = a;
+        if (Vector3.SqrMagnitude(point - b) < minDistSq)
+            closestPoint = b;
+        if (Vector3.SqrMagnitude(point - c) < minDistSq)
+            closestPoint = c;
+
+        return closestPoint;
     }
 
     /// <summary>
@@ -408,32 +630,6 @@ public class ObjectInstanceManager : MonoBehaviour
         return -2f;
     }
 
-    private bool CellIntersectsTriangle(float3 negativeCornerPos, float3 v0, float3 v1, float3 v2)
-    {
-        float3 t0 = negativeCornerPos;
-        float3 t1 = negativeCornerPos + latticeLengths * new float3(1, 0, 0);
-        float3 t2 = negativeCornerPos + latticeLengths * new float3(1, 1, 0);
-        float3 t3 = negativeCornerPos + latticeLengths * new float3(0, 1, 0);
-        float3 t4 = negativeCornerPos + latticeLengths * new float3(0, 0, 1);
-        float3 t5 = negativeCornerPos + latticeLengths * new float3(1, 0, 1);
-        float3 t6 = negativeCornerPos + latticeLengths * new float3(1, 1, 1);
-        float3 t7 = negativeCornerPos + latticeLengths * new float3(0, 1, 1);
-
-        if (LineSegmentIntersectsTriangle(t0, t1, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t0, t3, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t0, t4, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t2, t1, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t2, t3, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t2, t6, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t5, t1, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t5, t4, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t5, t6, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t7, t6, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t7, t4, v0, v1, v2)) return true;
-        if (LineSegmentIntersectsTriangle(t7, t3, v0, v1, v2)) return true;
-        return false;
-    }
-
     /// <summary>
     /// Similar to RayIntersectsTriangleDetailed but only returns a bool if the 
     /// given lattice cell intersects the given triangle
@@ -467,36 +663,31 @@ public class ObjectInstanceManager : MonoBehaviour
 
         return true;
     }
-#endregion
 
-#region Clean up
-    /// <summary>
-    /// Frees up memory.
-    /// </summary>
-    private void CleanUp()
+    private bool CellEdgesIntersectsTri(float3 negativeCornerPos, float3 v0, float3 v1, float3 v2)
     {
-        addedEdges = null;
-        particlesDictionary = null;
-        meshVertices = null;
-        latticeCells = null;
-    }
-#endregion
+        float3 t0 = negativeCornerPos;
+        float3 t1 = negativeCornerPos + latticeLengths * new float3(1, 0, 0);
+        float3 t2 = negativeCornerPos + latticeLengths * new float3(1, 1, 0);
+        float3 t3 = negativeCornerPos + latticeLengths * new float3(0, 1, 0);
+        float3 t4 = negativeCornerPos + latticeLengths * new float3(0, 0, 1);
+        float3 t5 = negativeCornerPos + latticeLengths * new float3(1, 0, 1);
+        float3 t6 = negativeCornerPos + latticeLengths * new float3(1, 1, 1);
+        float3 t7 = negativeCornerPos + latticeLengths * new float3(0, 1, 1);
 
-#region Helper functions
-    public int to1D(int3 pos, int3 dimensions)
-    {
-        return (pos.z * dimensions.x * dimensions.y) + (pos.y * dimensions.x) + pos.x;
-    }
-
-    public int3 to3D(int idx)
-    {
-        int3 result = int3.zero;
-        result.z = idx / (latticeDimensions.x * latticeDimensions.y);
-        idx -= result.z * latticeDimensions.x * latticeDimensions.y;
-        result.y = idx / latticeDimensions.x;
-        result.x = idx % latticeDimensions.x;
-
-        return result;
+        if (LineSegmentIntersectsTriangle(t0, t1, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t0, t3, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t0, t4, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t2, t1, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t2, t3, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t2, t6, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t5, t1, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t5, t4, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t5, t6, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t7, t6, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t7, t4, v0, v1, v2)) return true;
+        if (LineSegmentIntersectsTriangle(t7, t3, v0, v1, v2)) return true;
+        return false;
     }
 
     private void OnDrawGizmosSelected()
