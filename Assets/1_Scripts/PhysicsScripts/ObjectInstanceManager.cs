@@ -102,7 +102,8 @@ public class ObjectInstanceManager : MonoBehaviour
 
     // Collision mesh data
     private CollisionVertex[] collisionVertices;
-    private int[] collisionTriangles;
+    private int3[] collisionTriangles;
+    private int2[] collisionEdges;
 #endregion
 
 #region Initialisation
@@ -387,13 +388,30 @@ public class ObjectInstanceManager : MonoBehaviour
         FillSubLattice(colMeshVerts, colMeshTris, edgeHits, queue);
 
         // Create collision mesh data
-        // Disperses mass and creates the collision vertices
+        // Disperses mass and assigns the collision vertices
         DisperseSubLatticeMass(colMeshVerts);
 
-        // Assign triangles
-        collisionTriangles = colMeshTris;
+        // Assign triangles and edges
+        collisionTriangles = new int3[colMeshTris.Length / 3];
+        HashSet<int2> edgeHash = new HashSet<int2>();
+        for (int i = 0; i < colMeshTris.Length / 3; i++)
+        {
+            // Get the coresponding triangle vertex indexes
+            int i0 = colMeshTris[i*3];
+            int i1 = colMeshTris[i*3+1];
+            int i2 = colMeshTris[i*3+2];
 
-        
+            // Assign triangles
+            collisionTriangles[i] = new int3(i0, i1, i2);
+
+            // Adds the edges with ascending order in the hash
+            edgeHash.Add(i0 < i1 ? new int2(i0, i1) : new int2(i1, i0));
+            edgeHash.Add(i1 < i2 ? new int2(i1, i2) : new int2(i2, i1));
+            edgeHash.Add(i2 < i0 ? new int2(i2, i0) : new int2(i0, i2));
+        }
+
+        // Assigns edges
+        collisionEdges = edgeHash.ToArray();
     }
 
 #region Triangle Case
