@@ -198,7 +198,10 @@ public class ObjectInstanceManager : MonoBehaviour
         solver.AddSoftBody(
             this, mass, distanceCompliance, volumeCompliance,
             particles, distanceConGroups, distanceConstraints,
-            volumeConstraints, verticesTriLinear
+            volumeConstraints, verticesTriLinear,
+            collisionVertices,
+            collisionTriangles,
+            collisionEdges
         );
     }
 
@@ -414,7 +417,7 @@ public class ObjectInstanceManager : MonoBehaviour
         collisionEdges = edgeHash.ToArray();
     }
 
-#region Triangle Case
+#region Triangle Fill
     /// <summary>
     /// Tests which cells the triangle actually intesects
     /// with the main lattice and adds them if they do intersect.
@@ -503,7 +506,7 @@ public class ObjectInstanceManager : MonoBehaviour
     }
 #endregion
 
-#region Inside Case
+#region Inside Fill
     /// <summary>
     /// Fills the main lattice.
     /// </summary>

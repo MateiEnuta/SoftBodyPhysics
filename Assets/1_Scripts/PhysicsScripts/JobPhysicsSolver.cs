@@ -389,6 +389,11 @@ public class JobPhysicsSolver : MonoBehaviour
     private NativeList<DistanceConstraint>[] distanceConstraints;
     private NativeList<VolumeConstraint>[] volumeConstraints;
 
+    // Collision data
+    private NativeList<CollisionVertex> collisionVertices;
+    private NativeList<int3> collisionTriangles;
+    private NativeList<int2> collisionEdges;
+
     // Debug
     private bool initialised = false;
 #endregion
@@ -540,13 +545,17 @@ public class JobPhysicsSolver : MonoBehaviour
         List<int2>[] bodyDisConGroups,
         List<DistanceConstraintRef>[] bodyDisConstraints,
         List<VolumeConstraintRef>[] bodyVolConstraints,
-        VertexTriLinear[] bodyVerticesTriLinear)
+        VertexTriLinear[] bodyVerticesTriLinear,
+        CollisionVertex[] bodyCollisionVertices,
+        int3[] bodyCollisionTriangles,
+        int2[] bodyCollisionEdges)
     {
         if (!initialised) InitialiseSolver();
 
         // Register new soft body instance
         int verticesOffset = verticesPositions.Length;
         softBodies.Add(new SoftBodyData(objectManager, verticesOffset));
+        
 
         // Add all particles belonging to the body
         int particlesOffset = particles.Length;
@@ -554,6 +563,7 @@ public class JobPhysicsSolver : MonoBehaviour
 
         for (int i = 0; i < bodyParticles.Count; i++)
             particles.Add(new Particle(bodyParticles[i], particleInvMass));
+        
 
         // Add empty vertex entries + trilinear mapping
         for (int i = 0; i < bodyVerticesTriLinear.Length; i++)
@@ -569,6 +579,7 @@ public class JobPhysicsSolver : MonoBehaviour
                     new int4(particlesOffset),
                     bodyVerticesTriLinear[i].triLinearValues));
         }
+
 
         // Append all constraints into the solver's 8-channel structure
         for (int k = 0; k < 8; k++)
@@ -588,6 +599,34 @@ public class JobPhysicsSolver : MonoBehaviour
             for (int i = 0; i < bodyVolConstraints[k].Count; i++)
                 volumeConstraints[k].Add(new VolumeConstraint(
                     bodyVolConstraints[k][i], particlesOffset, bodyVolCompliance));
+        }
+
+
+        // Add collision data
+        int collisionVerticesOffset = collisionVertices.Length;
+        for (int i = 0; i < bodyCollisionVertices.Length; i++)
+        {
+            // Add a new collision vertex with the offset
+            collisionVertices.Add(new CollisionVertex(
+                bodyCollisionVertices[i].idx03 +
+                new int4(collisionVerticesOffset),
+                bodyCollisionVertices[i].idx47 +
+                new int4(collisionVerticesOffset),
+                bodyCollisionVertices[i].triLinearValues,
+                bodyCollisionVertices[i].invMass
+            ));
+        }
+
+        for (int i = 0; i < bodyCollisionTriangles.Length; i++)
+        {
+            // Add a new triangle with the offset
+            collisionTriangles.Add(bodyCollisionTriangles[i] + new int3(collisionVerticesOffset));
+        }
+
+        for (int i = 0; i < bodyCollisionEdges.Length; i++)
+        {
+            // Add a new edge with the offset
+            collisionEdges.Add(bodyCollisionEdges[i] + new int2(collisionVerticesOffset));
         }
     }
 #endregion
@@ -618,6 +657,11 @@ public class JobPhysicsSolver : MonoBehaviour
             distanceConstraints[i] = new NativeList<DistanceConstraint>(Allocator.Persistent);
             volumeConstraints[i] = new NativeList<VolumeConstraint>(Allocator.Persistent);
         }
+
+        // Initialise collision data
+        collisionVertices = new NativeList<CollisionVertex>(Allocator.Persistent);
+        collisionTriangles = new NativeList<int3>(Allocator.Persistent);
+        collisionEdges = new NativeList<int2>(Allocator.Persistent);
     }
 
     private void OnDestroy()
@@ -644,6 +688,11 @@ public class JobPhysicsSolver : MonoBehaviour
         distanceConGroups = null;
         distanceConstraints = null;
         volumeConstraints = null;
+
+        // Dispose collision data
+        collisionVertices.Dispose();
+        collisionTriangles.Dispose();
+        collisionEdges.Dispose();
     }
 #endregion
 }
