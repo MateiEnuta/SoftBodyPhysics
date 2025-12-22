@@ -144,6 +144,17 @@ public static class PointTriangleCCD
         double c2p = Vector3.Dot(n1, va) + Vector3.Dot(n2, a0);
         double c3p = Vector3.Dot(n2, va);
 
+        // Degenerate: if the cubic is ~0, they are (numerically) coplanar for the whole step.
+        // The simple "solve cubic then test" approach breaks down in constantly-coplanar cases.
+        if (Math.Abs(c0p) < 1e-12 && Math.Abs(c1p) < 1e-12 && Math.Abs(c2p) < 1e-12 && Math.Abs(c3p) < 1e-12)
+        {
+            // Always coplanar → reduce to 2D point–triangle CCD
+            return PointTriangleCCD2D(
+                a0, b0, c0,
+                va, vb, vc,
+                dt, eps);
+        }
+
         // Find real roots in [0, dt].
         var roots = SolveCubicAllReal(c3p, c2p, c1p, c0p);
         foreach (double tD in roots)
@@ -271,21 +282,14 @@ public static class PointTriangleCCD
         double k3 = Vector3.Dot(vc, n2);
 
         // Degenerate: if the cubic is ~0, they are (numerically) coplanar for the whole step.
-        // The simple "solve cubic then test" approach breaks down in constantly-coplanar cases. [web:25]
+        // The simple "solve cubic then test" approach breaks down in constantly-coplanar cases.
         if (Math.Abs(k0) < 1e-12 && Math.Abs(k1) < 1e-12 && Math.Abs(k2) < 1e-12 && Math.Abs(k3) < 1e-12)
         {
-            // Practical fallback: sample a few times (increase steps if you see misses).
-            // If you need exact handling for this case, it becomes a dedicated 2D continuous test.
-            const int samples = 8;
-            for (int i = 0; i <= samples; i++)
-            {
-                float t = dt * (i / (float)samples);
-                Vector3 B = b0 + vb * t;
-                Vector3 C = c0 + vc * t;
-                Vector3 D = d0 + vd * t;
-                if (SegmentsIntersect3D(a0, B, C, D, eps)) return true;
-            }
-            return false;
+            // Always coplanar → reduce to 2D edge–edge CCD
+            return EdgeEdgeCCD2D(
+                A0, B0, Va, Vb,
+                C0, D0, Vc, Vd,
+                dt, eps);
         }
 
         // Solve cubic for candidate coplanarity times
@@ -494,5 +498,152 @@ public static class PointTriangleCCD
         return -Math.Pow(-x, 1.0 / 3.0);
     }
 #endregion
-}
 
+#region 2D Coplanar Fallbacks
+
+    private static bool PointTriangleCCD2D(
+        Vector3 a0, Vector3 b0, Vector3 c0,
+        Vector3 va, Vector3 vb, Vector3 vc,
+        float dt, float eps)
+    {
+        Vector3 n = Vector3.Cross(b0 - a0, c0 - a0);
+        if (n.sqrMagnitude <= eps * eps) return false;
+
+        BuildPlaneBasis(n, out Vector3 u, out Vector3 v);
+
+        Vector2 A0 = Project2D(a0, u, v);
+        Vector2 B0 = Project2D(b0, u, v);
+        Vector2 C0 = Project2D(c0, u, v);
+
+        Vector2 VA = Project2D(va, u, v);
+        Vector2 VB = Project2D(vb, u, v);
+        Vector2 VC = Project2D(vc, u, v);
+
+        // Edge CCD: point vs each moving edge
+        if (PointSegmentCCD2D(A0, B0, VA, VB, dt, eps)) return true;
+        if (PointSegmentCCD2D(B0, C0, VB, VC, dt, eps)) return true;
+        if (PointSegmentCCD2D(C0, A0, VC, VA, dt, eps)) return true;
+
+        return false;
+    }
+
+    private static bool EdgeEdgeCCD2D(
+        Vector3 a0, Vector3 b0, Vector3 va, Vector3 vb,
+        Vector3 c0, Vector3 d0, Vector3 vc, Vector3 vd,
+        float dt, float eps)
+    {
+        Vector3 n = Vector3.Cross(b0 - a0, d0 - c0);
+        if (n.sqrMagnitude <= eps * eps)
+            n = Vector3.Cross(b0 - a0, c0 - a0);
+
+        if (n.sqrMagnitude <= eps * eps) return false;
+
+        BuildPlaneBasis(n, out Vector3 u, out Vector3 v);
+
+        Vector2 A0 = Project2D(a0, u, v);
+        Vector2 B0 = Project2D(b0, u, v);
+        Vector2 C0 = Project2D(c0, u, v);
+        Vector2 D0 = Project2D(d0, u, v);
+
+        Vector2 VA = Project2D(va, u, v);
+        Vector2 VB = Project2D(vb, u, v);
+        Vector2 VC = Project2D(vc, u, v);
+        Vector2 VD = Project2D(vd, u, v);
+
+        // Symmetric endpoint–segment CCD
+        if (PointSegmentCCD2D(C0 - A0, D0 - A0, VC - VA, VD - VA, dt, eps)) return true;
+        if (PointSegmentCCD2D(C0 - B0, D0 - B0, VC - VB, VD - VB, dt, eps)) return true;
+
+        if (PointSegmentCCD2D(A0 - C0, B0 - C0, VA - VC, VB - VC, dt, eps)) return true;
+        if (PointSegmentCCD2D(A0 - D0, B0 - D0, VA - VD, VB - VD, dt, eps)) return true;
+
+        return false;
+    }
+
+    private static bool PointSegmentCCD2D(
+        Vector2 A0, Vector2 B0,
+        Vector2 VA, Vector2 VB,
+        float dt, float eps)
+    {
+        Vector2 D0 = B0 - A0;
+        Vector2 VD = VB - VA;
+
+        float c0 = Cross2D(A0, D0);
+        float c1 = Cross2D(A0, VD) + Cross2D(VA, D0);
+        float c2 = Cross2D(VA, VD);
+
+        int roots = SolveQuadratic(c2, c1, c0, out float t0, out float t1);
+
+        for (int i = 0; i < roots; i++)
+        {
+            float t = (i == 0) ? t0 : t1;
+            if (t < -eps || t > dt + eps) continue;
+
+            Vector2 A = A0 + VA * t;
+            Vector2 B = B0 + VB * t;
+            Vector2 AB = B - A;
+
+            float ab2 = AB.sqrMagnitude;
+            if (ab2 <= eps * eps) continue;
+
+            float s = Vector2.Dot(-A, AB) / ab2;
+            if (s >= -eps && s <= 1f + eps)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool PointInTriangle2D(Vector2 p, Vector2 a, Vector2 b, Vector2 c, float eps)
+    {
+        float o1 = Orient(a, b, p);
+        float o2 = Orient(b, c, p);
+        float o3 = Orient(c, a, p);
+
+        bool hasNeg = (o1 < -eps) || (o2 < -eps) || (o3 < -eps);
+        bool hasPos = (o1 > eps) || (o2 > eps) || (o3 > eps);
+
+        return !(hasNeg && hasPos);
+    }
+
+    private static void BuildPlaneBasis(Vector3 n, out Vector3 u, out Vector3 v)
+    {
+        n = n.normalized;
+        Vector3 a = (Mathf.Abs(n.x) > 0.9f) ? Vector3.up : Vector3.right;
+        u = Vector3.Cross(n, a).normalized;
+        v = Vector3.Cross(n, u);
+    }
+
+    private static Vector2 Project2D(Vector3 p, Vector3 u, Vector3 v)
+    {
+        return new Vector2(Vector3.Dot(p, u), Vector3.Dot(p, v));
+    }
+
+    private static float Cross2D(Vector2 a, Vector2 b)
+    {
+        return a.x * b.y - a.y * b.x;
+    }
+
+    private static int SolveQuadratic(float a, float b, float c, out float r0, out float r1)
+    {
+        r0 = r1 = 0f;
+        const float EPS = 1e-6f;
+
+        if (Mathf.Abs(a) < EPS)
+        {
+            if (Mathf.Abs(b) < EPS) return 0;
+            r0 = -c / b;
+            return 1;
+        }
+
+        float disc = b * b - 4f * a * c;
+        if (disc < 0f) return 0;
+
+        float s = Mathf.Sqrt(Mathf.Max(0f, disc));
+        r0 = (-b - s) / (2f * a);
+        r1 = (-b + s) / (2f * a);
+        return (Mathf.Abs(s) < EPS) ? 1 : 2;
+    }
+
+#endregion
+}
