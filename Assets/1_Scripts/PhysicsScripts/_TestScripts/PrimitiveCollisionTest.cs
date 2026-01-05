@@ -609,10 +609,24 @@ public static class PointTriangleCCD
     private static void BuildPlaneBasis(Vector3 n, out Vector3 u, out Vector3 v)
     {
         n = n.normalized;
-        Vector3 a = (Mathf.Abs(n.x) > 0.9f) ? Vector3.up : Vector3.right;
+        
+        // Pick the cardinal axis LEAST parallel to n
+        float absX = Mathf.Abs(n.x);
+        float absY = Mathf.Abs(n.y);
+        float absZ = Mathf.Abs(n.z);
+        
+        Vector3 a;
+        if (absX < absY && absX < absZ)
+            a = Vector3.right;      // n.x is smallest
+        else if (absY < absZ)
+            a = Vector3.up;         // n.y is smallest
+        else
+            a = Vector3.forward;    // n.z is smallest
+        
         u = Vector3.Cross(n, a).normalized;
-        v = Vector3.Cross(n, u);
+        v = Vector3.Cross(n, u).normalized;  // Normalize v too for robustness
     }
+
 
     private static Vector2 Project2D(Vector3 p, Vector3 u, Vector3 v)
     {
