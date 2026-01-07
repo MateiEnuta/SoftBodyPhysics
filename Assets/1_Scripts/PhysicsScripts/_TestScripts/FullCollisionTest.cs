@@ -65,6 +65,9 @@ public class FullCollisionTest : MonoBehaviour
                 out bool usedParallelFallback, out bool rayIntersectsTriangle, 
                 out float planeT
             );
+            Vector3 closestPoint = RayTriangleUtil.ClosestPointOnTriangle(
+                previousPointPos.position, p1, p2, p3
+            );
 
             Vector3 intersectionDirection = intersectionPoint - previousPointPos.position;
             intersectionDirection.Normalize();
@@ -72,14 +75,14 @@ public class FullCollisionTest : MonoBehaviour
             float alligment = Vector3.Dot(intersectionDirection, currentPointPos.position - previousPointPos.position);
             float distanceToIntersection = Vector3.Distance(previousPointPos.position, intersectionPoint);
 
-            float totalDistance = Vector3.Distance(
-                previousPointPos.position, 
-                previousPointPos.position + velocityDir * planeT
-            );
-            if (!rayIntersectsTriangle) totalDistance += Vector3.Distance(
-                intersectionPoint, 
-                previousPointPos.position + velocityDir * planeT
-            );
+            // float totalDistance = Vector3.Distance(
+            //     previousPointPos.position, 
+            //     previousPointPos.position + velocityDir * planeT
+            // );
+            // if (!rayIntersectsTriangle) totalDistance += Vector3.Distance(
+            //     intersectionPoint, 
+            //     previousPointPos.position + velocityDir * planeT
+            // );
 
             float relativeDistance = alligment - distanceToIntersection;
             if (relativeDistance >= 0) trianglesOrdered.Add(

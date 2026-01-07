@@ -259,7 +259,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!114 &169372809
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -274,6 +274,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::JobPhysicsSolver
   substeps: 20
   damping: 0
+  staticMeshes:
+  - {fileID: 284984836}
 --- !u!4 &169372810
 Transform:
   m_ObjectHideFlags: 0
@@ -314,7 +316,7 @@ Transform:
   m_GameObject: {fileID: 215842297}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 1.038, y: 0.72499996, z: 1.168}
+  m_LocalPosition: {x: -1.26, y: -2.63, z: -0.27}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -338,7 +340,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!64 &284984837
 MeshCollider:
   m_ObjectHideFlags: 0
@@ -957,7 +959,7 @@ Transform:
   m_GameObject: {fileID: 1137943577}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: -0.528, y: 1.333, z: -0.9043}
+  m_LocalPosition: {x: 0.325, y: 1.229, z: 0.316}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -1516,7 +1518,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::FullCollisionTest
   previousPointPos: {fileID: 1137943578}
   currentPointPos: {fileID: 215842298}
-  clock: 1644
+  clock: 0
 --- !u!1 &4652372680364437531
 GameObject:
   m_ObjectHideFlags: 0
@@ -1535,7 +1537,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!4 &5466064695077825185
 Transform:
   m_ObjectHideFlags: 0
