@@ -295,19 +295,81 @@ public struct VolumeConstraintsUpdate : IJobParallelFor
 // Keeps particles above y=0. Very crude but safe for testing.
 // -----------------------------------------------------------------------------
 [BurstCompile]
-public struct CrudeCollision : IJobParallelFor
+public struct CrudeCollision : IJob
 {
+    // Lattice particles
     public NativeArray<Particle> particles;
 
-    public void Execute(int index)
+    // Collision vertices (trilinearly embedded in the lattice)
+    [ReadOnly] public NativeArray<CollisionVertex> collisionVertices;
+
+    public void Execute()
     {
-        Particle particle = particles[index];
+        for (int v = 0; v < collisionVertices.Length; v++)
+        {
+            CollisionVertex cv = collisionVertices[v];
 
-        // Clamp to the plane at y = 0
-        if (particle.position.y < 0)
-            particle.position.y = 0;
+            // Indices of the 8 lattice particles
+            int i0 = cv.idx03.x;
+            int i1 = cv.idx03.y;
+            int i2 = cv.idx03.z;
+            int i3 = cv.idx03.w;
+            int i4 = cv.idx47.x;
+            int i5 = cv.idx47.y;
+            int i6 = cv.idx47.z;
+            int i7 = cv.idx47.w;
 
-        particles[index] = particle;
+            float x = cv.triLinearValues.x;
+            float y = cv.triLinearValues.y;
+            float z = cv.triLinearValues.z;
+
+            // Trilinear weights
+            float w0 = (1 - x) * (1 - y) * (1 - z);
+            float w1 = (    x) * (1 - y) * (1 - z);
+            float w2 = (1 - x) * (    y) * (1 - z);
+            float w3 = (    x) * (    y) * (1 - z);
+            float w4 = (1 - x) * (1 - y) * (    z);
+            float w5 = (    x) * (1 - y) * (    z);
+            float w6 = (1 - x) * (    y) * (    z);
+            float w7 = (    x) * (    y) * (    z);
+
+            // Current collision vertex position (trilinear interpolation)
+            float collisionY =
+                particles[i0].position.y * w0 +
+                particles[i1].position.y * w1 +
+                particles[i2].position.y * w2 +
+                particles[i3].position.y * w3 +
+                particles[i4].position.y * w4 +
+                particles[i5].position.y * w5 +
+                particles[i6].position.y * w6 +
+                particles[i7].position.y * w7;
+
+            // If above plane, nothing to do
+            if (collisionY >= 0f)
+                continue;
+
+            // Push collision vertex onto the plane y = 0
+            float correction = -collisionY;
+
+            // Distribute correction back to lattice particles
+            ApplyCorrection(i0, 1, correction);
+            ApplyCorrection(i1, 1, correction);
+            ApplyCorrection(i2, 1, correction);
+            ApplyCorrection(i3, 1, correction);
+            ApplyCorrection(i4, 1, correction);
+            ApplyCorrection(i5, 1, correction);
+            ApplyCorrection(i6, 1, correction);
+            ApplyCorrection(i7, 1, correction);
+        }
+    }
+
+    private void ApplyCorrection(int idx, float weight, float correction)
+    {
+        if (weight <= 0f) return;
+
+        Particle p = particles[idx];
+        p.position.y += correction * weight;
+        particles[idx] = p;
     }
 }
 
@@ -969,21 +1031,91 @@ public class JobPhysicsSolver : MonoBehaviour
         // // Very simple plane collision for starters
         // CrudeCollision crudeCollision = new CrudeCollision
         // {
-        //     particles = particles.AsArray()
+        //     particles = particles.AsArray(),
+        //     collisionVertices = collisionVertices.AsArray()
         // };
-        // handle = crudeCollision.Schedule(particleCount, 64, handle);
+        // handle = crudeCollision.Schedule(handle);
 
         // Complex initial point-triangle collision
-        PointTriCollision pointTriCollision = new PointTriCollision
+        // PointTriCollision pointTriCollision = new PointTriCollision
+        // {
+        //     particles = particles.AsArray(),
+        //     collisionVertices = collisionVertices.AsArray(),
+        //     collisionTriangles = collisionTriangles.AsArray(),
+        //     staticColPoints = staticColPoints.AsArray(),
+        //     staticColTriangles = staticColTriangles.AsArray(),
+        //     collisionBuffer = collisionBuffer
+        // };
+        // handle = pointTriCollision.Schedule(handle);
+
+        handle.Complete();
+        for (int v = 0; v < collisionVertices.Length; v++)
         {
-            particles = particles.AsArray(),
-            collisionVertices = collisionVertices.AsArray(),
-            collisionTriangles = collisionTriangles.AsArray(),
-            staticColPoints = staticColPoints.AsArray(),
-            staticColTriangles = staticColTriangles.AsArray(),
-            collisionBuffer = collisionBuffer
-        };
-        handle = pointTriCollision.Schedule(handle);
+            CollisionVertex cv = collisionVertices[v];
+
+            // Indices of the 8 lattice particles
+            int i0 = cv.idx03.x;
+            int i1 = cv.idx03.y;
+            int i2 = cv.idx03.z;
+            int i3 = cv.idx03.w;
+            int i4 = cv.idx47.x;
+            int i5 = cv.idx47.y;
+            int i6 = cv.idx47.z;
+            int i7 = cv.idx47.w;
+
+            float x = cv.triLinearValues.x;
+            float y = cv.triLinearValues.y;
+            float z = cv.triLinearValues.z;
+
+            // Trilinear weights
+            float w0 = (1 - x) * (1 - y) * (1 - z);
+            float w1 = (    x) * (1 - y) * (1 - z);
+            float w2 = (1 - x) * (    y) * (1 - z);
+            float w3 = (    x) * (    y) * (1 - z);
+            float w4 = (1 - x) * (1 - y) * (    z);
+            float w5 = (    x) * (1 - y) * (    z);
+            float w6 = (1 - x) * (    y) * (    z);
+            float w7 = (    x) * (    y) * (    z);
+
+            // Current collision vertex position (trilinear interpolation)
+            float collisionY =
+                particles[i0].position.y * w0 +
+                particles[i1].position.y * w1 +
+                particles[i2].position.y * w2 +
+                particles[i3].position.y * w3 +
+                particles[i4].position.y * w4 +
+                particles[i5].position.y * w5 +
+                particles[i6].position.y * w6 +
+                particles[i7].position.y * w7;
+
+            Debug.Log(collisionY);
+
+            // If above plane, nothing to do
+            if (collisionY >= 0f)
+                continue;
+
+            // Push collision vertex onto the plane y = 0
+            float correction = -collisionY;
+
+            // Distribute correction back to lattice particles
+            ApplyCorrection(i0, 1, correction);
+            ApplyCorrection(i1, 1, correction);
+            ApplyCorrection(i2, 1, correction);
+            ApplyCorrection(i3, 1, correction);
+            ApplyCorrection(i4, 1, correction);
+            ApplyCorrection(i5, 1, correction);
+            ApplyCorrection(i6, 1, correction);
+            ApplyCorrection(i7, 1, correction);
+        }
+    }
+
+    private void ApplyCorrection(int idx, float weight, float correction)
+    {
+        if (weight <= 0f) return;
+
+        Particle p = particles[idx];
+        p.position.y += correction * weight;
+        particles[idx] = p;
     }
 
     private void UpdateVelocities(ref JobHandle handle, float dt)
