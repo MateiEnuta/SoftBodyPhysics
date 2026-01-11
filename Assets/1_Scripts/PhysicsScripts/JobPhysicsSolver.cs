@@ -551,7 +551,6 @@ public struct PointTriCollision : IJob
     private void ApplyCollisionVertexCorrection(int cvIdx, float3 delta)
     {
         CollisionVertex cv = collisionVertices[cvIdx];
-        float4 bary = cv.baryCoords;
 
         // Indices of the tetra particles
         int i0 = cv.tetraIdx.x;
@@ -560,19 +559,19 @@ public struct PointTriCollision : IJob
         int i3 = cv.tetraIdx.w;
 
         Particle p0 = particles[i0];
-        p0.position += bary.x * delta;
+        p0.position += delta;
         particles[i0] = p0;
 
         Particle p1 = particles[i1];
-        p1.position += bary.y * delta;
+        p1.position += delta;
         particles[i1] = p1;
 
         Particle p2 = particles[i2];
-        p2.position += bary.z * delta;
+        p2.position += delta;
         particles[i2] = p2;
 
         Particle p3 = particles[i3];
-        p3.position += bary.w * delta;
+        p3.position += delta;
         particles[i3] = p3;
     }
 
@@ -589,7 +588,7 @@ public struct PointTriCollision : IJob
             // Small normal offset
             float3 normalOffset = math.normalize(math.cross(cT2 - cT1, cT3 - cT1)) * 0.001f;
 
-            previousPosition = hitPoint + normalOffset;
+            //previousPosition = hitPoint + normalOffset;
             float3 newCPos = slideEnd + normalOffset;
 
             CollisionVertex cv = collisionVertices[p];
