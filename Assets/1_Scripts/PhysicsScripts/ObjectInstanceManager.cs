@@ -30,30 +30,28 @@ public struct VolumeConstraintRef
     }
 }
 
-public struct VertexTriLinear
+public struct VisualVertex
 {
-    public int4 idx03, idx47;
-    public float3 triLinearValues;
+    public int4 tetraIdx;
+    public float4 baryCoords;
 
-    public VertexTriLinear(int4 idx03, int4 idx47, float3 triLinearValues)
+    public VisualVertex(int4 tetraIdx, float4 baryCoords)
     {
-        this.idx03 = idx03;
-        this.idx47 = idx47;
-        this.triLinearValues = triLinearValues;
+        this.tetraIdx = tetraIdx;
+        this.baryCoords = baryCoords;
     }
 }
 
 public struct CollisionVertex
 {
-    public int4 idx03, idx47;
-    public float3 triLinearValues;
+    public int4 tetraIdx;
+    public float4 baryCoords;
     public float invMass;
 
-    public CollisionVertex(int4 idx03, int4 idx47, float3 triLinearValues, float invMass)
+    public CollisionVertex(int4 tetraIdx, float4 baryCoords, float invMass)
     {
-        this.idx03 = idx03;
-        this.idx47 = idx47;
-        this.triLinearValues = triLinearValues;
+        this.tetraIdx = tetraIdx;
+        this.baryCoords = baryCoords;
         this.invMass = invMass;
     }
 }
@@ -78,6 +76,7 @@ public class ObjectInstanceManager : MonoBehaviour
     // Lattice data
     // Main lattice
     private int[] latticeCells;
+    private int[] latticeTetraStart;
     private float3 latticeNegativeCorner;
     private float3 latticeLengths;
     private int latticeCount;
@@ -92,7 +91,7 @@ public class ObjectInstanceManager : MonoBehaviour
     private int3 particlesDimensions;
     private List<float3> particles;
     private int[] particlesDictionary;
-    private VertexTriLinear[] verticesTriLinear;
+    private VisualVertex[] visualVerticesBary;
 
     // Constraint data
     private HashSet<int2> addedEdges; // Redundancy list
@@ -158,7 +157,8 @@ public class ObjectInstanceManager : MonoBehaviour
 
         // -1 for unassigned, -2 for outside and 0 for inside
         latticeCells = new int[latticeCount];
-        for (int i = 0; i < latticeCount; i++) latticeCells[i] = -1;
+        latticeTetraStart = new int[latticeCount];
+        for (int i = 0; i < latticeCount; i++) latticeTetraStart[i] = latticeCells[i] = -1;
         subLatticeCells = new int[subLatticeCount];
         for (int i = 0; i < subLatticeCount; i++) subLatticeCells[i] = -1;
 
@@ -198,7 +198,7 @@ public class ObjectInstanceManager : MonoBehaviour
         solver.AddSoftBody(
             this, mass, distanceCompliance, volumeCompliance,
             particles, distanceConGroups, distanceConstraints,
-            volumeConstraints, verticesTriLinear,
+            volumeConstraints, visualVerticesBary,
             collisionVertices,
             collisionTriangles,
             collisionEdges
@@ -220,7 +220,7 @@ public class ObjectInstanceManager : MonoBehaviour
     private void LoopVertices()
     {
         meshVertices = mesh.vertices;
-        verticesTriLinear = new VertexTriLinear[numberOfVertices];
+        visualVerticesBary = new VisualVertex[numberOfVertices];
 
         for (int i = 0; i < numberOfVertices; i++)
         {
@@ -232,18 +232,23 @@ public class ObjectInstanceManager : MonoBehaviour
             // Try adding the containing cell
             AddLatticeCell(negativeCorner, cellID);
 
-            // Stores data for trilinear interpolation
-            verticesTriLinear[i] = new VertexTriLinear(
-                new int4(TryAddParticle(negativeCorner + new int3(0, 0, 0)),
-                          TryAddParticle(negativeCorner + new int3(1, 0, 0)),
-                          TryAddParticle(negativeCorner + new int3(1, 1, 0)),
-                          TryAddParticle(negativeCorner + new int3(0, 1, 0))),
-                new int4(TryAddParticle(negativeCorner + new int3(0, 0, 1)),
-                          TryAddParticle(negativeCorner + new int3(1, 0, 1)),
-                          TryAddParticle(negativeCorner + new int3(1, 1, 1)),
-                          TryAddParticle(negativeCorner + new int3(0, 1, 1))),
-                math.frac(positionInLattice / latticeLengths)
-            );
+            // Stores data for barycentric interpolation
+            int cellParity = negativeCorner.x%2 + negativeCorner.y%2 * 2 + negativeCorner.z%2 * 4;
+            int tetraStart = latticeTetraStart[cellID];
+            for (int tet = tetraStart; tet < tetraStart + 5; tet++)
+            {
+                int4 currentTet = volumeConstraints[cellParity][tet].pidx;
+                if (TryGetBarycentricInclusive((float3)meshVertices[i],
+                    particles[currentTet.x], particles[currentTet.y],
+                    particles[currentTet.z], particles[currentTet.w],
+                    out float4 bary))
+                {
+                    visualVerticesBary[i] = new VisualVertex(
+                        currentTet,
+                        bary
+                    );
+                }
+            }
         }
     }
 #endregion
@@ -273,6 +278,8 @@ public class ObjectInstanceManager : MonoBehaviour
         int cellParity = negativeCorner.x%2 + negativeCorner.y%2 * 2 + negativeCorner.z%2 * 4;
         
         AddDistanceConstraints(pidx, cellParity);
+        // Current cell respective tetra start index
+        latticeTetraStart[cellID] = volumeConstraints[cellParity].Count;
         AddVolumeConstraints(pidx, cellParity);
 
         latticeCells[cellID] = 0;
@@ -703,27 +710,33 @@ public class ObjectInstanceManager : MonoBehaviour
             // position in main lattice
             float3 posInMainLattice = (float3)colMeshVerts[i] - latticeNegativeCorner;
             int3 mainNegativeCorner = (int3)(posInMainLattice / latticeLengths);
+            int mainCellID = to1D(mainNegativeCorner, latticeDimensions);
 
             // position and cellID for the sub lattice
             float3 posInSubLattice = (float3)colMeshVerts[i] - subLatticeNegativeCorner;
-            int3 negativeCorner = (int3)(posInSubLattice / subLatticeLenghts);
-            int subCellID = to1D(negativeCorner, subLatticeDimensions);
+            int3 subNegativeCorner = (int3)(posInSubLattice / subLatticeLenghts);
+            int subCellID = to1D(subNegativeCorner, subLatticeDimensions);
 
-            // Create new collision vertex with the trilinear based on main mesh
+            // Create new collision vertex with the barycentric interpolation based on main mesh
             // and invMass based on sub mesh cell influence and how many other particles
             // are in the same cell (massDivider)
-            collisionVertices[i] = new CollisionVertex(
-                new int4(TryAddParticle(mainNegativeCorner + new int3(0, 0, 0)),
-                          TryAddParticle(mainNegativeCorner + new int3(1, 0, 0)),
-                          TryAddParticle(mainNegativeCorner + new int3(1, 1, 0)),
-                          TryAddParticle(mainNegativeCorner + new int3(0, 1, 0))),
-                new int4(TryAddParticle(mainNegativeCorner + new int3(0, 0, 1)),
-                          TryAddParticle(mainNegativeCorner + new int3(1, 0, 1)),
-                          TryAddParticle(mainNegativeCorner + new int3(1, 1, 1)),
-                          TryAddParticle(mainNegativeCorner + new int3(0, 1, 1))),
-                math.frac(posInMainLattice / latticeLengths),
-                1f / (subLatticeCells[subCellID] * subCellMass / massDivider[i])
-            );
+            int cellParity = mainNegativeCorner.x%2 + mainNegativeCorner.y%2 * 2 + mainNegativeCorner.z%2 * 4;
+            int tetraStart = latticeTetraStart[mainCellID];
+            for (int tet = tetraStart; tet < tetraStart + 5; tet++)
+            {
+                int4 currentTet = volumeConstraints[cellParity][tet].pidx;
+                if (TryGetBarycentricInclusive((float3)colMeshVerts[i],
+                    particles[currentTet.x], particles[currentTet.y],
+                    particles[currentTet.z], particles[currentTet.w],
+                    out float4 bary))
+                {
+                    collisionVertices[i] = new CollisionVertex(
+                        currentTet,
+                        bary,
+                        1f / (subLatticeCells[subCellID] * subCellMass / massDivider[i])
+                    );
+                }
+            }
         }
     }
 
@@ -763,6 +776,7 @@ public class ObjectInstanceManager : MonoBehaviour
         particlesDictionary = null;
         meshVertices = null;
         latticeCells = null;
+        latticeTetraStart = null;
         subLatticeCells = null;
     }
 #endregion
@@ -1065,7 +1079,6 @@ public class ObjectInstanceManager : MonoBehaviour
         vertices = newVerts.ToArray();
         triangles = newTris;
     }
-
     private readonly struct Vec3Key : IEquatable<Vec3Key>
     {
         private readonly int x, y, z;
@@ -1093,6 +1106,44 @@ public class ObjectInstanceManager : MonoBehaviour
         }
     }
 
+    // bary = (lambdaA, lambdaB, lambdaC, lambdaD) for (a,b,c,d)
+    // Returns true for inside OR on boundary (faces/edges/vertices), within epsilon.
+    public static bool TryGetBarycentricInclusive(
+        float3 p,
+        float3 a, float3 b, float3 c, float3 d,
+        out float4 bary,
+        float epsilon = 1e-6f,
+        bool renormalize = true)
+    {
+        float3 ab = b - a;
+        float3 ac = c - a;
+        float3 ad = d - a;
+
+        float3x3 M = new float3x3(ab, ac, ad); // columns
+        float det = math.determinant(M);
+        if (math.abs(det) <= epsilon)
+        {
+            bary = default;
+            return false; // degenerate / near-degenerate tet
+        }
+
+        float3 uvw = math.mul(math.inverse(M), p - a);
+        float u = uvw.x;
+        float v = uvw.y;
+        float w = uvw.z;
+
+        bary = new float4(1f - u - v - w, u, v, w);
+
+        if (renormalize)
+        {
+            float s = bary.x + bary.y + bary.z + bary.w;
+            if (math.abs(s) > epsilon) bary /= s;
+        }
+
+        // Inclusive test (counts faces/edges/vertices as inside).
+        // Upper bound isn't strictly necessary if sum==1, but helps with numerical drift.
+        return math.all(bary >= -epsilon) && math.all(bary <= 1f + epsilon);
+    }
 
 #region Debug
     private void OnDrawGizmosSelected()
