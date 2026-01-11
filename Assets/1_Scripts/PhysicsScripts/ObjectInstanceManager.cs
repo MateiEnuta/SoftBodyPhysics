@@ -358,7 +358,7 @@ public class ObjectInstanceManager : MonoBehaviour
         if (collisionMesh == null) return;
         Vector3[] colMeshVerts = collisionMesh.vertices;
         int[] colMeshTris = collisionMesh.triangles;
-        RemoveDuplicateVertices(ref colMeshVerts, ref colMeshTris, 0.0001f);
+        RemoveDuplicateVertices(ref colMeshVerts, ref colMeshTris);
 
         // Loop though each triangle and add all the cells it intersects
         for (int i = 0; i < colMeshTris.Length; i+=3)
