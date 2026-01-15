@@ -103,6 +103,9 @@ public class ObjectInstanceManager : MonoBehaviour
     private CollisionVertex[] collisionVertices;
     private int3[] collisionTriangles;
     private int2[] collisionEdges;
+    // Lattice mesh data
+    private List<int3> latticeCollisionTriangles;
+    private List<int2> latticeCollisionEdges;
 #endregion
 
 #region Initialisation
@@ -112,11 +115,11 @@ public class ObjectInstanceManager : MonoBehaviour
         if (mesh == null) return;
         numberOfVertices = mesh.vertexCount;
         mesh.MarkDynamic();
-        mesh.SetVertexBufferParams(numberOfVertices, 
-        new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3, stream: 0),
-        new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.Float32, 3, stream: 1),
-        new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2, stream: 2)
-        );
+        // mesh.SetVertexBufferParams(numberOfVertices, 
+        //     new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3, stream: 0),
+        //     new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.Float32, 3, stream: 1),
+        //     new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2, stream: 2)
+        // );
 
         // Initialising functions
         InitLatticeAndParticles();
@@ -127,6 +130,7 @@ public class ObjectInstanceManager : MonoBehaviour
         // Transforms particle positions from local mesh space to world space
         for (int i = 0; i < particles.Count; i++) particles[i] = transform.TransformPoint(particles[i]);
         // Finalization functions
+        CreateCellMesh();
         CleanUp();
         UploadDataToSolver();
 
@@ -189,9 +193,122 @@ public class ObjectInstanceManager : MonoBehaviour
     }
 #endregion
 
-#region Solver addition
+#region Optional cell mesh
+    private void CreateCellMesh()
+    {
+        latticeCollisionTriangles = new List<int3>();
+        latticeCollisionEdges = new List<int2>();
+        HashSet<int2> addedEdges = new HashSet<int2>();
+        for (int cellID = 0; cellID < latticeCells.Length; cellID++)
+        {
+            if (latticeCells[cellID] != 0) continue;
+            int3 negativeCorner = to3D(cellID, latticeDimensions);
+            int[] pidx =
+            {
+                TryAddParticle(negativeCorner + new int3(0, 0, 0)), // 0
+                TryAddParticle(negativeCorner + new int3(1, 0, 0)), // 1
+                TryAddParticle(negativeCorner + new int3(1, 1, 0)), // 2
+                TryAddParticle(negativeCorner + new int3(0, 1, 0)), // 3
+                TryAddParticle(negativeCorner + new int3(0, 0, 1)), // 4
+                TryAddParticle(negativeCorner + new int3(1, 0, 1)), // 5
+                TryAddParticle(negativeCorner + new int3(1, 1, 1)), // 6
+                TryAddParticle(negativeCorner + new int3(0, 1, 1)), // 7
+            };
 
-    public void UploadDataToSolver()
+            int3 c = negativeCorner;
+
+            // +X face
+            if (c.x + 1 < latticeDimensions.x)
+            {
+                int nID = to1D(c + new int3(1, 0, 0), latticeDimensions);
+                if (latticeCells[nID] != 0)
+                    AddCellSide(new int4(pidx[2], pidx[6], pidx[5], pidx[1]), addedEdges);
+            }
+            else AddCellSide(new int4(pidx[2], pidx[6], pidx[5], pidx[1]), addedEdges);
+
+            // -X face
+            if (c.x - 1 >= 0)
+            {
+                int nID = to1D(c + new int3(-1, 0, 0), latticeDimensions);
+                if (latticeCells[nID] != 0)
+                    AddCellSide(new int4(pidx[4], pidx[7], pidx[3], pidx[0]), addedEdges);
+            }
+            else AddCellSide(new int4(pidx[4], pidx[7], pidx[3], pidx[0]), addedEdges);
+
+            // +Y face
+            if (c.y + 1 < latticeDimensions.y)
+            {
+                int nID = to1D(c + new int3(0, 1, 0), latticeDimensions);
+                if (latticeCells[nID] != 0)
+                    AddCellSide(new int4(pidx[7], pidx[6], pidx[2], pidx[3]), addedEdges);
+            }
+            else AddCellSide(new int4(pidx[7], pidx[6], pidx[2], pidx[3]), addedEdges);
+
+            // -Y face
+            if (c.y - 1 >= 0)
+            {
+                int nID = to1D(c + new int3(0, -1, 0), latticeDimensions);
+                if (latticeCells[nID] != 0)
+                    AddCellSide(new int4(pidx[1], pidx[5], pidx[4], pidx[0]), addedEdges);
+            }
+            else AddCellSide(new int4(pidx[1], pidx[5], pidx[4], pidx[0]), addedEdges);
+
+            // +Z face
+            if (c.z + 1 < latticeDimensions.z)
+            {
+                int nID = to1D(c + new int3(0, 0, 1), latticeDimensions);
+                if (latticeCells[nID] != 0)
+                    AddCellSide(new int4(pidx[5], pidx[6], pidx[7], pidx[4]), addedEdges);
+            }
+            else AddCellSide(new int4(pidx[5], pidx[6], pidx[7], pidx[4]), addedEdges);
+
+            // -Z face
+            if (c.z - 1 >= 0)
+            {
+                int nID = to1D(c + new int3(0, 0, -1), latticeDimensions);
+                if (latticeCells[nID] != 0)
+                    AddCellSide(new int4(pidx[3], pidx[2], pidx[1], pidx[0]), addedEdges);
+            }
+            else AddCellSide(new int4(pidx[3], pidx[2], pidx[1], pidx[0]), addedEdges);
+        }
+    }
+
+    private void AddCellSide(int4 sideIdx, HashSet<int2> addedEdges)
+    {
+        latticeCollisionTriangles.Add(sideIdx.xyz);
+        latticeCollisionTriangles.Add(sideIdx.zwx);
+
+        latticeCollisionEdges.Add(sideIdx.xz);
+
+        if (!addedEdges.Contains(sideIdx.yx))
+        {
+            addedEdges.Add(sideIdx.xy);
+            latticeCollisionEdges.Add(sideIdx.xy);
+        }
+
+        if (!addedEdges.Contains(sideIdx.zy))
+        {
+            addedEdges.Add(sideIdx.yz);
+            latticeCollisionEdges.Add(sideIdx.yz);
+        }
+
+        if (!addedEdges.Contains(sideIdx.wz))
+        {
+            addedEdges.Add(sideIdx.zw);
+            latticeCollisionEdges.Add(sideIdx.zw);
+        }
+
+        if (!addedEdges.Contains(sideIdx.xw))
+        {
+            addedEdges.Add(sideIdx.wx);
+            latticeCollisionEdges.Add(sideIdx.wx);
+        }
+    }
+#endregion
+
+#region Solver integration
+
+    private void UploadDataToSolver()
     {
         JobPhysicsSolver solver = FindFirstObjectByType(typeof(JobPhysicsSolver)) as JobPhysicsSolver;
 
@@ -201,13 +318,21 @@ public class ObjectInstanceManager : MonoBehaviour
             volumeConstraints, visualVerticesBary,
             collisionVertices,
             collisionTriangles,
-            collisionEdges
+            collisionEdges,
+            latticeCollisionTriangles,
+            latticeCollisionEdges
         );
     }
 
     public void UpdateMesh(NativeArray<float3> vertices, int dataStart)
     {
-        mesh.SetVertexBufferData(vertices, dataStart, 0, numberOfVertices);
+        NativeSlice<float3> slice = new NativeSlice<float3>(vertices, dataStart, numberOfVertices);
+        Vector3[] verts = new Vector3[numberOfVertices];
+        for (int i = 0; i < numberOfVertices; i++)
+            verts[i] = slice[i];
+        mesh.SetVertices(verts);
+        mesh.RecalculateBounds();
+        mesh.RecalculateNormals();
     }
 
 #endregion
@@ -1185,6 +1310,26 @@ public class ObjectInstanceManager : MonoBehaviour
                 }
             }
         }
+
+        // Gizmos.color = Color.green;
+        // for (int e = 0; e < latticeCollisionEdges.Count; e++)
+        // {
+        //     Vector3 lineStart = particles[latticeCollisionEdges[e].x];
+        //     Vector3 lineEnd = particles[latticeCollisionEdges[e].y];
+        //     Gizmos.DrawLine(lineStart, lineEnd);
+        // }
+        // Gizmos.color = Color.red;
+        // for (int t = 0; t < latticeCollisionTriangles.Count; t++)
+        // {
+        //     Vector3 p0 = particles[latticeCollisionTriangles[t].x];
+        //     Vector3 p1 = particles[latticeCollisionTriangles[t].y];
+        //     Vector3 p2 = particles[latticeCollisionTriangles[t].z];
+        //     Vector3 triangleCenter = (p0 + p1 + p2) / 3;
+
+        //     Vector3 n = Vector3.Cross(p1 - p0, p2 - p0).normalized;
+            
+        //     Gizmos.DrawLine(triangleCenter, triangleCenter + n * 0.2f);
+        // }
     }
 #endregion
 #endregion
