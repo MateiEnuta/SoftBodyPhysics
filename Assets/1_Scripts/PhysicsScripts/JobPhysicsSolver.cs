@@ -355,106 +355,8 @@ public struct PointTriCollision : IJob
     public NativeArray<float3> staticColPoints;
     public NativeArray<int3> staticColTriangles;
 
-    // Lattice mesh
-    public NativeArray<int3> latticeCollisionTriangles;
-    public NativeArray<int2> latticeCollisionEdges;
-
-    // Collision buffer list
-    public NativeList<CollisionBuffer> collisionBuffer;
-
     public void Execute()
     {
-        // for (int p = 0; p < collisionVertices.Length; p++)
-        // {
-        //     collisionBuffer.Clear();
-
-        //     float3 previousPosition = TrilinearInterpolation(p, true);
-        //     float3 currentPosition = TrilinearInterpolation(p, false);
-        //     float3 velocityDir = math.normalize(currentPosition - previousPosition);
-
-        //     for (int t = 0; t < collisionTriangles.Length; t++)
-        //     {
-        //         int3 currentTriangle = collisionTriangles[t];
-        //         if (currentTriangle.x == p ||
-        //             currentTriangle.y == p ||
-        //             currentTriangle.z == p) continue;
-
-        //         float3 pT1 = TrilinearInterpolation(currentTriangle.x, true);
-        //         float3 pT2 = TrilinearInterpolation(currentTriangle.y, true);
-        //         float3 pT3 = TrilinearInterpolation(currentTriangle.z, true);
-        //         float3 cT1 = TrilinearInterpolation(currentTriangle.x, false);
-        //         float3 cT2 = TrilinearInterpolation(currentTriangle.y, false);
-        //         float3 cT3 = TrilinearInterpolation(currentTriangle.z, false);
-                
-        //         float3 collisionPoint = RayToTriangleClampedBarycentric(
-        //             previousPosition, velocityDir,
-        //             pT1, pT2, pT3, out float3 bary
-        //         );
-        //         collisionPoint += math.cross(pT2 - pT1, pT3 - pT1) * 0.001f;
-
-        //         float3 currentTrianglePos = cT1 * bary.x + cT2 * bary.y + cT3 * bary.z;
-
-        //         float3 collisionPointDir = math.normalize(collisionPoint - previousPosition);
-        //         float pointAlligment = math.dot(collisionPointDir, currentPosition - previousPosition);
-        //         float triangleAlligment = math.dot(collisionPointDir, collisionPoint - currentTrianglePos);
-        //         float distanceToIntersection = math.distance(previousPosition, collisionPoint);
-
-        //         float relativeDistance = pointAlligment - triangleAlligment - distanceToIntersection;
-        //         if (relativeDistance >= 0) collisionBuffer.Add(
-        //             new CollisionBuffer(t, false, relativeDistance)
-        //         );
-        //     }
-
-        //     for (int t = 0; t < staticColTriangles.Length; t++)
-        //     {
-        //         int3 currentTriangle = staticColTriangles[t];
-        //         float3 cT1 = staticColPoints[currentTriangle.x];
-        //         float3 cT2 = staticColPoints[currentTriangle.y];
-        //         float3 cT3 = staticColPoints[currentTriangle.z];
-
-        //         float3 collisionPoint = RayToTriangleClampedBarycentric(
-        //             previousPosition, velocityDir,
-        //             cT1, cT2, cT3, out float3 bary
-        //         );
-        //         collisionPoint += math.normalize(math.cross(cT2 - cT1, cT3 - cT1)) * 0.001f;
-
-        //         float3 collisionPointDir = math.normalize(collisionPoint - previousPosition);
-        //         float pointAlligment = math.dot(collisionPointDir, currentPosition - previousPosition);
-        //         float distanceToIntersection = math.distance(previousPosition, collisionPoint);
-
-        //         float relativeDistance = pointAlligment - distanceToIntersection;
-        //         if (relativeDistance >= 0) collisionBuffer.Add(
-        //             new CollisionBuffer(t, true, relativeDistance)
-        //         );
-        //     }
-
-        //     for (int i = 0; i < collisionBuffer.Length - 1; i++)
-        //     {
-        //         for (int j = i + 1; j < collisionBuffer.Length; j++)
-        //         {
-        //             if (collisionBuffer[j].distance < collisionBuffer[i].distance)
-        //             {
-        //                 CollisionBuffer aux = collisionBuffer[i];
-        //                 collisionBuffer[i] = collisionBuffer[j];
-        //                 collisionBuffer[j] = aux;
-        //             }
-        //         }
-        //     }
-
-        //     for (int c = 0; c < collisionBuffer.Length; c++)
-        //     {
-        //         CollisionBuffer currentCol = collisionBuffer[c];
-        //         if (currentCol.isStatic)
-        //         {
-        //             SolveStaticCollision(p, ref previousPosition, ref currentPosition, currentCol.otherIdx);
-        //         }
-        //         else
-        //         {
-                    
-        //         }
-        //     }
-        // }
-
         for (int p = 0; p < collisionVertices.Length; p++)
         {
             CollisionVertex cv = collisionVertices[p];
@@ -475,136 +377,12 @@ public struct PointTriCollision : IJob
                 if (triIdx.x == p || triIdx.y == p || triIdx.z == p) continue;
                 SolveDynamicCollision(p, previousPosition, ref currentPosition, t);
             }
-
+            
             for (int t = 0; t < staticColTriangles.Length; t++)
             {
                 SolveStaticCollision(p, previousPosition, ref currentPosition, t);
             }
         }
-
-        // for (int p = 0; p < particles.Length; p++)
-        // {
-        //     for (int t = 0; t < latticeCollisionTriangles.Length; t++)
-        //     {
-        //         int3 triIdx = latticeCollisionTriangles[t];
-        //         if (triIdx.x == p || triIdx.y == p || triIdx.z == p) continue;
-        //         SolveDynamicCollisionParticles(p, particles[p].previousPosition, particles[p].position, t);
-        //     }
-            
-
-        //     for (int t = 0; t < staticColTriangles.Length; t++)
-        //     {
-        //         float3 cT1 = staticColPoints[staticColTriangles[t].x];
-        //         float3 cT2 = staticColPoints[staticColTriangles[t].y];
-        //         float3 cT3 = staticColPoints[staticColTriangles[t].z];
-        //         if (!IntersectSegmentTriangleAndSlide(particles[p].previousPosition, particles[p].position,
-        //             cT1, cT2, cT3, out float3 hitPoint, out float3 slideEnd)) continue;
-
-        //         float3 normalOffset = math.normalize(math.cross(cT2 - cT1, cT3 - cT1)) * 0.001f;
-        //         Particle particle = particles[p];
-        //         particle.position = slideEnd + normalOffset;
-        //         particles[p] = particle;
-        //     }
-        // }
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void SolveDynamicCollisionParticles(
-        int pointParticleIdx,
-        float3 previousP,
-        float3 currentP,
-        int triIdx)
-    {
-        int3 tri = latticeCollisionTriangles[triIdx];
-
-        // Point particle
-        Particle pP = particles[pointParticleIdx];
-
-        // Triangle particles
-        Particle pA = particles[tri.x];
-        Particle pB = particles[tri.y];
-        Particle pC = particles[tri.z];
-
-        // Previous triangle positions
-        float3 A = pA.previousPosition;
-        float3 B = pB.previousPosition;
-        float3 C = pC.previousPosition;
-
-        // Current triangle positions
-        float3 cA = pA.position;
-        float3 cB = pB.position;
-        float3 cC = pC.position;
-
-        // Point velocity
-        float3 pVelocityOffset = currentP - previousP;
-        float velLenSq = math.lengthsq(pVelocityOffset);
-        if (velLenSq < 1e-12f) return;
-
-        float3 pVelocityDir = pVelocityOffset * math.rsqrt(velLenSq);
-
-        // Ray vs previous triangle
-        float3 hitPoint = RayToTriangleClampedBarycentric(
-            previousP, pVelocityDir, A, B, C, out float3 triBary
-        );
-
-        float3 hitOffset = hitPoint - previousP;
-        float hitDis = math.length(hitOffset);
-        if (hitDis < 1e-6f) return;
-
-        float3 hitDir = hitOffset / hitDis;
-
-        // Triangle motion at hit barycentric
-        float3 triPrevPos = triBary.x * A + triBary.y * B + triBary.z * C;
-        float3 triCurrPos = triBary.x * cA + triBary.y * cB + triBary.z * cC;
-        float3 triBaryVelOffset = triCurrPos - triPrevPos;
-
-        float totalDistance =
-            hitDis
-            - math.dot(hitDir, pVelocityOffset)
-            + math.dot(hitDir, triBaryVelOffset);
-
-        // Speculative discard
-        if (totalDistance > 0.01f) return;
-
-
-        // Current triangle normal
-        float3 triNormal = math.normalize(math.cross(cB - cA, cC - cA));
-
-        // Closest point on current triangle
-        ClosestPointOnTriangleBarycentric(
-            currentP, cA, cB, cC, out float3 cTriBary, true
-        );
-
-        float Cn = math.dot(currentP - cA, triNormal) - 0.001f;
-        if (Cn >= 0f) return;
-
-        // Gradients
-        float3 pGrad = triNormal;
-        float3 AGrad = -cTriBary.x * triNormal;
-        float3 BGrad = -cTriBary.y * triNormal;
-        float3 CGrad = -cTriBary.z * triNormal;
-
-        float sumWeightedGradients = 0f;
-        sumWeightedGradients += pP.invMass;
-        sumWeightedGradients += (cTriBary.x * cTriBary.x) * pA.invMass;
-        sumWeightedGradients += (cTriBary.y * cTriBary.y) * pB.invMass;
-        sumWeightedGradients += (cTriBary.z * cTriBary.z) * pC.invMass;
-
-        if (sumWeightedGradients < 1e-12f) return;
-
-        float deltaLambda = -Cn / sumWeightedGradients;
-
-        // Apply point correction
-        pP.position += pP.invMass * deltaLambda * pGrad;
-        particles[pointParticleIdx] = pP;
-
-        // Apply triangle corrections
-        pA.position += pA.invMass * deltaLambda * AGrad;
-        pB.position += pB.invMass * deltaLambda * BGrad;
-        pC.position += pC.invMass * deltaLambda * CGrad;
-        particles[tri.x] = pA;
-        particles[tri.y] = pB;
-        particles[tri.z] = pC;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -649,9 +427,8 @@ public struct PointTriCollision : IJob
 
         // Find the closest point on tri to particle vel
         float3 pVelocityOffser = currentP - previousP;
-        float3 pVelocityDir = math.normalize(pVelocityOffser);
-        float3 hitPoint = RayToTriangleClampedBarycentric(
-            previousP, pVelocityDir, A, B, C, out float3 triBary
+        float3 hitPoint = ClosestPointOnTriangleBarycentric(
+            previousP, A, B, C, out float3 triBary
         );
 
         // Paritcle to hit point data
@@ -713,7 +490,7 @@ public struct PointTriCollision : IJob
 
             // Compute correction based on the difference between 
             float3 correction = newCPos - currentPosition;
-
+            
             // Update actual particles positions
             CollisionVertex cv = collisionVertices[p];
             UpdateParticePos(cv, correction);
@@ -748,67 +525,6 @@ public struct PointTriCollision : IJob
         p3.position += correction;
         particles[i3] = p3;
     }
-
-    // Ray -> triangle plane hit, clamped to triangle; returns clamped point + barycentric (u,v,w).
-    // If ray is degenerate/parallel/behind, falls back to closest point to origin (or origin projected on plane, then clamped).
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private float3 RayToTriangleClampedBarycentric(
-        float3 rayOrigin,
-        float3 rayDir,
-        float3 a,
-        float3 b,
-        float3 c,
-        out float3 bary,
-        float parallelEps = 1e-6f,
-        float zeroDirEpsSqr = 1e-12f,
-        float degeneracyEpsSqr = 1e-12f)
-    {
-        // "Ray" with no direction -> point query.
-        if (math.lengthsq(rayDir) < zeroDirEpsSqr)
-            return ClosestPointOnTriangleBarycentric(rayOrigin, a, b, c, out bary);
-
-        float3 ab = b - a;
-        float3 ac = c - a;
-        float3 n = math.cross(ab, ac);
-        float nSqr = math.lengthsq(n);
-
-        // Degenerate triangle -> return nearest vertex (with bary).
-        if (nSqr < degeneracyEpsSqr)
-        {
-            float da = math.lengthsq(rayOrigin - a);
-            float db = math.lengthsq(rayOrigin - b);
-            float dc = math.lengthsq(rayOrigin - c);
-
-            if (da <= db && da <= dc) { bary = new float3(1f, 0f, 0f); return a; }
-            if (db <= dc)            { bary = new float3(0f, 1f, 0f); return b; }
-                                     { bary = new float3(0f, 0f, 1f); return c; }
-        }
-
-        float denom = math.dot(n, rayDir);
-
-        // Near-parallel -> project origin onto plane along unit normal, then clamp to triangle.
-        if (math.abs(denom) <= parallelEps)
-        {
-            float invLenN = math.rsqrt(nSqr);
-            float3 nUnit = n * invLenN;
-
-            float signedDist = math.dot(nUnit, rayOrigin - a);
-            float3 originOnPlane = rayOrigin - signedDist * nUnit;
-
-            return ClosestPointOnTriangleBarycentric(originOnPlane, a, b, c, out bary);
-        }
-
-        // Ray-plane: t = dot(n, (a - O)) / dot(n, D)
-        float t = math.dot(n, a - rayOrigin) / denom;
-
-        // Behind origin -> stable fallback to closest point to origin.
-        if (t < 0f)
-            return ClosestPointOnTriangleBarycentric(rayOrigin, a, b, c, out bary);
-
-        float3 planeHit = rayOrigin + rayDir * t;
-        return ClosestPointOnTriangleBarycentric(planeHit, a, b, c, out bary);
-    }
-
 
     // Returns closest point on triangle ABC to point P, and barycentric coords (u,v,w) sums to 1 for that point.
     // Region-test method consistent with Real-Time Collision Detection.
@@ -971,7 +687,7 @@ public struct PointTriCollision : IJob
 
         float3 tvec = p0 - a;
         float u = math.dot(tvec, pvec) * invDet;
-        if (u < 0f || u > 1f)
+        if (u < -0.001f || u > 1.001f)
             return false;
 
         float3 qvec = math.cross(tvec, e1);
@@ -981,7 +697,7 @@ public struct PointTriCollision : IJob
 
         // For segment direction (p1 - p0), t in [0,1] lies along the segment. [web:263]
         float t = math.dot(e2, qvec) * invDet;
-        if (t < 0f || t > 1f)
+        if (t < -0.001f || t > 1.001f)
             return false;
 
         hitPoint = p0 + dir * t;
@@ -1061,20 +777,6 @@ public struct VolumeConstraint
         this.compliance = compliance;
     }
 }
-
-public struct CollisionBuffer
-{
-    public int otherIdx;
-    public bool isStatic;
-    public float distance;
-
-    public CollisionBuffer(int otherIdx, bool isStatic, float distance)
-    {
-        this.otherIdx = otherIdx;
-        this.isStatic = isStatic;
-        this.distance = distance;
-    }
-}
 #endregion
 
 public class JobPhysicsSolver : MonoBehaviour
@@ -1106,9 +808,10 @@ public class JobPhysicsSolver : MonoBehaviour
     private NativeList<int2> collisionEdges;
     private NativeList<float3> staticColPoints;
     private NativeList<int3> staticColTriangles;
-    private NativeList<int3> latticeCollisionTriangles;
-    private NativeList<int2> latticeCollisionEdges;
-    private NativeList<CollisionBuffer> collisionBuffer;
+
+    // Depricated extra data
+    // private NativeList<int3> latticeCollisionTriangles;
+    // private NativeList<int2> latticeCollisionEdges;
 
     // Debug
     private bool initialised = false;
@@ -1222,10 +925,7 @@ public class JobPhysicsSolver : MonoBehaviour
             collisionVertices = collisionVertices.AsArray(),
             collisionTriangles = collisionTriangles.AsArray(),
             staticColPoints = staticColPoints.AsArray(),
-            staticColTriangles = staticColTriangles.AsArray(),
-            latticeCollisionTriangles = latticeCollisionTriangles.AsArray(),
-            latticeCollisionEdges = latticeCollisionEdges.AsArray(),
-            collisionBuffer = collisionBuffer
+            staticColTriangles = staticColTriangles.AsArray()
         };
         handle = pointTriCollision.Schedule(handle);
     }
@@ -1346,29 +1046,30 @@ public class JobPhysicsSolver : MonoBehaviour
             ));
         }
 
+        // Add dynamic collision mesh data
         for (int i = 0; i < bodyCollisionTriangles.Length; i++)
         {
             // Add a new triangle with the offset
             collisionTriangles.Add(bodyCollisionTriangles[i] + new int3(collisionVerticesOffset));
         }
-
         for (int i = 0; i < bodyCollisionEdges.Length; i++)
         {
             // Add a new edge with the offset
             collisionEdges.Add(bodyCollisionEdges[i] + new int2(collisionVerticesOffset));
         }
 
-        for (int i = 0; i < bodyLatticeCollisionTriangles.Count; i++)
-        {
-            // Add a new lattice triangle with the offset
-            latticeCollisionTriangles.Add(bodyLatticeCollisionTriangles[i] + new int3(particlesOffset));
-        }
+        // Depricated data
+        // for (int i = 0; i < bodyLatticeCollisionTriangles.Count; i++)
+        // {
+        //     // Add a new lattice triangle with the offset
+        //     latticeCollisionTriangles.Add(bodyLatticeCollisionTriangles[i] + new int3(particlesOffset));
+        // }
 
-        for (int i = 0; i < bodyLatticeCollisionEdges.Count; i++)
-        {
-            // Add a new lattice edge with the offset
-            latticeCollisionEdges.Add(bodyLatticeCollisionEdges[i] + new int2(particlesOffset));
-        }
+        // for (int i = 0; i < bodyLatticeCollisionEdges.Count; i++)
+        // {
+        //     // Add a new lattice edge with the offset
+        //     latticeCollisionEdges.Add(bodyLatticeCollisionEdges[i] + new int2(particlesOffset));
+        // }
     }
 #endregion
 
@@ -1428,9 +1129,8 @@ public class JobPhysicsSolver : MonoBehaviour
         }
 
         // Initialise extra collision data
-        latticeCollisionTriangles = new NativeList<int3>(Allocator.Persistent);
-        latticeCollisionEdges = new NativeList<int2>(Allocator.Persistent);
-        collisionBuffer = new NativeList<CollisionBuffer>(Allocator.Persistent);
+        // latticeCollisionTriangles = new NativeList<int3>(Allocator.Persistent);
+        // latticeCollisionEdges = new NativeList<int2>(Allocator.Persistent);
     }
 
     private void OnDestroy()
@@ -1466,9 +1166,8 @@ public class JobPhysicsSolver : MonoBehaviour
         staticColTriangles.Dispose();
 
         // Extra collision data
-        latticeCollisionTriangles.Dispose();
-        latticeCollisionEdges.Dispose();
-        collisionBuffer.Dispose();
+        // latticeCollisionTriangles.Dispose();
+        // latticeCollisionEdges.Dispose();
     }
 #endregion
 }
