@@ -67,6 +67,9 @@ public class ObjectInstanceManager : MonoBehaviour
     [SerializeField] private float mass = 1;
     [SerializeField] private float distanceCompliance = 0;
     [SerializeField] private float volumeCompliance = 0;
+    // Debug
+    [SerializeField] private bool debugCollisionMesh;
+    [SerializeField] private bool debugLatticeCells;
 
     // Mesh data
     private Mesh mesh;
@@ -79,17 +82,18 @@ public class ObjectInstanceManager : MonoBehaviour
     private int[] latticeTetraStart;
     private float3 latticeNegativeCorner;
     private float3 latticeLengths;
-    private int latticeCount;
+    private int latticeMaxCount, latticeCount;
     // Sub lattice
     private int[] subLatticeCells;
     private int3 subLatticeDimensions;
     private float3 subLatticeNegativeCorner;
     private float3 subLatticeLenghts;
-    private int subLatticeCount;
+    private int subLatticeMaxCount, subLatticeCount;
 
     // Particle data
     private int3 particlesDimensions;
     private List<float3> particles;
+    private List<float> particleMasses;
     private int[] particlesDictionary;
     private VisualVertex[] visualVerticesBary;
 
@@ -121,9 +125,8 @@ public class ObjectInstanceManager : MonoBehaviour
         //     new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2, stream: 2)
         // );
 
-        // Initialising functions
-        InitLatticeAndParticles();
-        InitConstraints();
+        // Main initialising function
+        InitialiseAllVariables();
         // Main functions
         LoopVertices();
         LoopInsideCells();
@@ -140,7 +143,7 @@ public class ObjectInstanceManager : MonoBehaviour
     }
 
     float EPSILON = 1e-4f;
-    private void InitLatticeAndParticles()
+    private void InitialiseAllVariables()
     {
         latticeDimensions = math.max(latticeDimensions, new int3(1, 1, 1));
         latticeNegativeCorner = (float3)mesh.bounds.min - new float3(EPSILON, EPSILON, EPSILON);
@@ -149,27 +152,36 @@ public class ObjectInstanceManager : MonoBehaviour
 
         particlesDimensions = latticeDimensions + new int3(1, 1, 1);
 
-        subLatticeMultiplier = math.max(subLatticeMultiplier, 2);
+        subLatticeMultiplier = math.max(subLatticeMultiplier, 4);
         subLatticeDimensions = latticeDimensions * subLatticeMultiplier;
         subLatticeNegativeCorner = (float3)mesh.bounds.min - new float3(EPSILON, EPSILON, EPSILON);
         subLatticeLenghts = (float3)mesh.bounds.size + new float3(2 * EPSILON, 2 * EPSILON, 2 * EPSILON);
         subLatticeLenghts /= (float3)subLatticeDimensions;
 
-        latticeCount = (int)(latticeDimensions.x * latticeDimensions.y * latticeDimensions.z);
-        subLatticeCount = (int)(subLatticeDimensions.x * subLatticeDimensions.y * subLatticeDimensions.z);
+        latticeMaxCount = (int)(latticeDimensions.x * latticeDimensions.y * latticeDimensions.z);
+        subLatticeMaxCount = (int)(subLatticeDimensions.x * subLatticeDimensions.y * subLatticeDimensions.z);
         int numberOfParticles = (int)(particlesDimensions.x * particlesDimensions.y * particlesDimensions.z);
 
+        latticeCount = 0;
+        subLatticeCount = 0;
+
         // -1 for unassigned, -2 for outside and 0 for inside
-        latticeCells = new int[latticeCount];
-        latticeTetraStart = new int[latticeCount];
-        for (int i = 0; i < latticeCount; i++) latticeTetraStart[i] = latticeCells[i] = -1;
-        subLatticeCells = new int[subLatticeCount];
-        for (int i = 0; i < subLatticeCount; i++) subLatticeCells[i] = -1;
+        latticeCells = new int[latticeMaxCount];
+        latticeTetraStart = new int[latticeMaxCount];
+        for (int i = 0; i < latticeMaxCount; i++) latticeTetraStart[i] = latticeCells[i] = -1;
+        subLatticeCells = new int[subLatticeMaxCount];
+        for (int i = 0; i < subLatticeMaxCount; i++) subLatticeCells[i] = -1;
 
         // -1 for unassigned and >= 0 for assigned with the particle index
         particles = new List<float3>(numberOfParticles);
+        particleMasses = new List<float>(numberOfParticles);
         particlesDictionary = new int[numberOfParticles];
-        for (int i = 0; i < numberOfParticles; i++) particlesDictionary[i] = -1;
+        for (int i = 0; i < numberOfParticles; i++) 
+        {
+            particlesDictionary[i] = -1;
+        }
+
+        InitConstraints();
     }
     private void InitConstraints()
     {
@@ -313,7 +325,8 @@ public class ObjectInstanceManager : MonoBehaviour
         JobPhysicsSolver solver = FindFirstObjectByType(typeof(JobPhysicsSolver)) as JobPhysicsSolver;
 
         solver.AddSoftBody(
-            this, mass, distanceCompliance, volumeCompliance,
+            this, mass, particleMasses, 
+            distanceCompliance, volumeCompliance,
             particles, distanceConGroups, distanceConstraints,
             volumeConstraints, visualVerticesBary,
             collisionVertices,
@@ -324,13 +337,21 @@ public class ObjectInstanceManager : MonoBehaviour
         );
     }
 
-    public void UpdateMesh(NativeArray<float3> vertices, int dataStart)
+    public void UpdateMesh(NativeList<float3> vertices, int verticesStart, 
+        NativeList<Particle> particles, int particleStart, int particleCount)
     {
-        NativeSlice<float3> slice = new NativeSlice<float3>(vertices, dataStart, numberOfVertices);
-        Vector3[] verts = new Vector3[numberOfVertices];
-        for (int i = 0; i < numberOfVertices; i++)
-            verts[i] = slice[i];
-        mesh.SetVertices(verts);
+        Vector3 centerPos = Vector3.zero;
+        for (int i = particleStart; i < particleStart + particleCount; i++)
+        {
+            centerPos += (Vector3)particles[i].position;
+            this.particles[i - particleStart] = particles[i].position;
+        }
+        centerPos /= particleCount;
+        transform.position = centerPos;
+
+        for (int i = verticesStart; i < verticesStart + numberOfVertices; i++)
+            meshVertices[i - verticesStart] = (Vector3)vertices[i] - centerPos;
+        mesh.SetVertices(meshVertices);
         mesh.RecalculateBounds();
         mesh.RecalculateNormals();
     }
@@ -408,6 +429,7 @@ public class ObjectInstanceManager : MonoBehaviour
         AddVolumeConstraints(pidx, cellParity);
 
         latticeCells[cellID] = 0;
+        latticeCount++;
     }
 
     /// <summary>
@@ -421,6 +443,7 @@ public class ObjectInstanceManager : MonoBehaviour
 
         particlesDictionary[particleIndex] = particles.Count;
         particles.Add(latticeNegativeCorner + position * latticeLengths);
+        particleMasses.Add(0);
         return particles.Count - 1;
     }
 
@@ -516,7 +539,7 @@ public class ObjectInstanceManager : MonoBehaviour
         HashSet<int> edgeHits = new HashSet<int>();
 
         // Queue for both the main and sub lattice flood fills
-        Queue<int> queue = new Queue<int>(subLatticeCount * (1/8));
+        Queue<int> queue = new Queue<int>(subLatticeMaxCount * (1/8));
 
         // Main lattice flood fill
         FillMainLattice(colMeshVerts, colMeshTris, edgeHits, queue);
@@ -525,7 +548,60 @@ public class ObjectInstanceManager : MonoBehaviour
 
         // Create collision mesh data
         // Disperses mass and assigns the collision vertices
-        DisperseSubLatticeMass(colMeshVerts);
+        //// DisperseSubLatticeMass(colMeshVerts);
+
+        // Loop though each collision vertex add trilinear values and calculate mass
+        collisionVertices = new CollisionVertex[colMeshVerts.Length];
+        for (int i = 0; i < colMeshVerts.Length; i++)
+        {
+            // position in main lattice
+            float3 posInMainLattice = (float3)colMeshVerts[i] - latticeNegativeCorner;
+            int3 mainNegativeCorner = (int3)(posInMainLattice / latticeLengths);
+            int mainCellID = to1D(mainNegativeCorner, latticeDimensions);
+
+            // position and cellID for the sub lattice
+            float3 posInSubLattice = (float3)colMeshVerts[i] - subLatticeNegativeCorner;
+            int3 subNegativeCorner = (int3)(posInSubLattice / subLatticeLenghts);
+            int subCellID = to1D(subNegativeCorner, subLatticeDimensions);
+
+            // Create new collision vertex with the barycentric interpolation based on main mesh
+            int cellParity = mainNegativeCorner.x%2 + mainNegativeCorner.y%2 * 2 + mainNegativeCorner.z%2 * 4;
+            int tetraStart = latticeTetraStart[mainCellID];
+            for (int tet = tetraStart; tet < tetraStart + 5; tet++)
+            {
+                int4 currentTet = volumeConstraints[cellParity][tet].pidx;
+                if (TryGetBarycentricInclusive((float3)colMeshVerts[i],
+                    particles[currentTet.x], particles[currentTet.y],
+                    particles[currentTet.z], particles[currentTet.w],
+                    out float4 bary))
+                {
+                    collisionVertices[i] = new CollisionVertex(
+                        currentTet,
+                        bary,
+                        0
+                    );
+                }
+            }
+        }
+
+        // Add weight to particles using the sub lattice
+        float subCellMass = mass / subLatticeCount;
+        for (int i = 0; i < subLatticeMaxCount; i++)
+        {
+            if (subLatticeCells[i] != 0) continue;
+
+            int3 mainLatticeCorner = to3D(i, subLatticeDimensions) / subLatticeMultiplier;
+            int mainLatticeIndex = to1D(mainLatticeCorner, latticeDimensions);
+
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(0, 0, 0))] += subCellMass / 8f;
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(1, 0, 0))] += subCellMass / 8f;
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(1, 1, 0))] += subCellMass / 8f;
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(0, 1, 0))] += subCellMass / 8f;
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(0, 0, 1))] += subCellMass / 8f;
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(1, 0, 1))] += subCellMass / 8f;
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(1, 1, 1))] += subCellMass / 8f;
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(0, 1, 1))] += subCellMass / 8f;
+        }
 
         // Assign triangles and edges
         collisionTriangles = new int3[colMeshTris.Length / 3];
@@ -612,6 +688,7 @@ public class ObjectInstanceManager : MonoBehaviour
                     if (!TriangleIntersectsCell(subLatticeNegativeCorner + subLatticeLenghts * cellCoords, subLatticeLenghts, a, b, c)) continue;
 
                     subLatticeCells[cellID] = 0;
+                    subLatticeCount++;
                 }
             }
         }
@@ -646,7 +723,7 @@ public class ObjectInstanceManager : MonoBehaviour
     private void FillMainLattice(Vector3[] colMeshVerts, int[] colMeshTris,
             HashSet<int> edgeHits, Queue<int> queue)
     {
-        for (int i = 0; i < latticeCount; i++)
+        for (int i = 0; i < latticeMaxCount; i++)
         {
             if (latticeCells[i] != -1) continue;
 
@@ -680,7 +757,7 @@ public class ObjectInstanceManager : MonoBehaviour
     private void FillSubLattice(Vector3[] colMeshVerts, int[] colMeshTris,
             HashSet<int> edgeHits, Queue<int> queue)
     {
-        for (int i = 0; i < subLatticeCount; i++)
+        for (int i = 0; i < subLatticeMaxCount; i++)
         {
             if (subLatticeCells[i] != -1) continue;
 
@@ -693,6 +770,7 @@ public class ObjectInstanceManager : MonoBehaviour
             {
                 // If it's inside add it to the queue
                 subLatticeCells[i] = 0;
+                subLatticeCount++;
                 queue.Enqueue(i);
 
                 FloodFillCells(queue, true, false);
@@ -745,7 +823,7 @@ public class ObjectInstanceManager : MonoBehaviour
                 if (forInside)
                 {
                     if (mainLattice) AddLatticeCell(nextCellCords, nextCellID);
-                    else subLatticeCells[nextCellID] = 0;
+                    else { subLatticeCells[nextCellID] = 0; subLatticeCount++; }
                     queue.Enqueue(nextCellID);
                 }
                 else
@@ -769,7 +847,7 @@ public class ObjectInstanceManager : MonoBehaviour
     private void DisperseSubLatticeMass(Vector3[] colMeshVerts)
     {
         // Queue for setting sub lattice cell influence
-        Queue<int2> massQueue = new Queue<int2>(subLatticeCount * (1/8));
+        Queue<int2> massQueue = new Queue<int2>(subLatticeMaxCount * (1/8));
 
         // For cases where 2 collision vertices are in the same sub cell
         int[] massDivider = new int[colMeshVerts.Length];
@@ -899,7 +977,6 @@ public class ObjectInstanceManager : MonoBehaviour
     {
         addedEdges = null;
         particlesDictionary = null;
-        meshVertices = null;
         latticeCells = null;
         latticeTetraStart = null;
         subLatticeCells = null;
@@ -1275,61 +1352,46 @@ public class ObjectInstanceManager : MonoBehaviour
     {
         if (mesh == null) return;
 
-        // Gizmos.color = Color.green;
-        // for (int x = 0; x < subLatticeDimensions.x; x++)
-        // {
-        //     for (int y = 0; y < subLatticeDimensions.y; y++)
-        //     {
-        //         for (int z = 0; z < subLatticeDimensions.z; z++)
-        //         {
-        //             if (subLatticeCells[to1D(new int3(x, y, z), subLatticeDimensions)] != 1) continue;
-        //             float3 cellCenter = subLatticeNegativeCorner + new float3(x + 0.5f, y + 0.5f, z + 0.5f) * subLatticeLenghts;
-        //             Gizmos.DrawWireCube(cellCenter, subLatticeLenghts);
-        //         }
-        //     }
-        // }
-
-        for (int f = 0; f < 8; f++)
+        if (debugLatticeCells)
         {
-            if (f == 0) Gizmos.color = Color.red;
-            if (f == 1) Gizmos.color = Color.orange;
-            if (f == 2) Gizmos.color = Color.yellow;
-            if (f == 3) Gizmos.color = Color.green;
-            if (f == 4) Gizmos.color = Color.cyan;
-            if (f == 5) Gizmos.color = Color.blue;
-            if (f == 6) Gizmos.color = Color.magenta;
-            if (f == 7) Gizmos.color = Color.white;
-            for (int g = 0; g < distanceConGroups[f].Count; g++)
+            for (int f = 0; f < 8; f++)
             {
-                for (int i = distanceConGroups[f][g].x; i < distanceConGroups[f][g].y; i++)
+                if (f == 0) Gizmos.color = Color.red;
+                if (f == 1) Gizmos.color = Color.orange;
+                if (f == 2) Gizmos.color = Color.yellow;
+                if (f == 3) Gizmos.color = Color.green;
+                if (f == 4) Gizmos.color = Color.cyan;
+                if (f == 5) Gizmos.color = Color.blue;
+                if (f == 6) Gizmos.color = Color.magenta;
+                if (f == 7) Gizmos.color = Color.white;
+                for (int g = 0; g < distanceConGroups[f].Count; g++)
                 {
-                    Vector3 lineStart = particles[distanceConstraints[f][i].pidx.x];
-                    Vector3 lineEnd = particles[distanceConstraints[f][i].pidx.y];
+                    for (int i = distanceConGroups[f][g].x; i < distanceConGroups[f][g].y; i++)
+                    {
+                        Vector3 lineStart = particles[distanceConstraints[f][i].pidx.x];
+                        Vector3 lineEnd = particles[distanceConstraints[f][i].pidx.y];
 
-                    Gizmos.DrawLine(lineStart, lineEnd);
+                        Gizmos.DrawLine(lineStart, lineEnd);
+                    }
                 }
             }
         }
 
-        // Gizmos.color = Color.green;
-        // for (int e = 0; e < latticeCollisionEdges.Count; e++)
-        // {
-        //     Vector3 lineStart = particles[latticeCollisionEdges[e].x];
-        //     Vector3 lineEnd = particles[latticeCollisionEdges[e].y];
-        //     Gizmos.DrawLine(lineStart, lineEnd);
-        // }
-        // Gizmos.color = Color.red;
-        // for (int t = 0; t < latticeCollisionTriangles.Count; t++)
-        // {
-        //     Vector3 p0 = particles[latticeCollisionTriangles[t].x];
-        //     Vector3 p1 = particles[latticeCollisionTriangles[t].y];
-        //     Vector3 p2 = particles[latticeCollisionTriangles[t].z];
-        //     Vector3 triangleCenter = (p0 + p1 + p2) / 3;
+        if (debugCollisionMesh)
+        {
+            Gizmos.color = Color.red;
+            for (int i = 0; i < collisionVertices.Length; i++)
+            {
+                float4 b = collisionVertices[i].baryCoords;
+                int4 idx = collisionVertices[i].tetraIdx;
+                Vector3 pos = b.x * particles[idx.x] +
+                            b.y * particles[idx.y] +
+                            b.z * particles[idx.z] +
+                            b.w * particles[idx.w];
 
-        //     Vector3 n = Vector3.Cross(p1 - p0, p2 - p0).normalized;
-            
-        //     Gizmos.DrawLine(triangleCenter, triangleCenter + n * 0.2f);
-        // }
+                Gizmos.DrawSphere(pos, 0.05f);
+            }
+        }
     }
 #endregion
 #endregion

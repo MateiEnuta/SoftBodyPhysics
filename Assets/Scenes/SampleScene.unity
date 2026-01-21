@@ -349,6 +349,8 @@ MonoBehaviour:
   mass: 5
   distanceCompliance: 0.000001
   volumeCompliance: 0.00000001
+  debugCollisionMesh: 0
+  debugLatticeCells: 0
 --- !u!23 &111343498
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -497,7 +499,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 11e391bfa8b594eab9cebb707339401c, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::JobPhysicsSolver
-  substeps: 7
+  substeps: 8
   damping: 0
   staticMeshes:
   - {fileID: 284984836}
@@ -681,6 +683,8 @@ MonoBehaviour:
   mass: 1
   distanceCompliance: 0.001
   volumeCompliance: 0.000001
+  debugCollisionMesh: 0
+  debugLatticeCells: 0
 --- !u!23 &225231827
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -1616,6 +1620,8 @@ MonoBehaviour:
   mass: 5
   distanceCompliance: 0.000001
   volumeCompliance: 0.00000001
+  debugCollisionMesh: 0
+  debugLatticeCells: 0
 --- !u!23 &756313582
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -1874,6 +1880,8 @@ MonoBehaviour:
   mass: 1000
   distanceCompliance: 0.00001
   volumeCompliance: 0.00000001
+  debugCollisionMesh: 0
+  debugLatticeCells: 0
 --- !u!23 &810018554
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -2066,6 +2074,8 @@ MonoBehaviour:
   mass: 5
   distanceCompliance: 0.000001
   volumeCompliance: 0.00000001
+  debugCollisionMesh: 0
+  debugLatticeCells: 0
 --- !u!23 &886422771
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -2178,6 +2188,8 @@ MonoBehaviour:
   mass: 5
   distanceCompliance: 0.000001
   volumeCompliance: 0.00000001
+  debugCollisionMesh: 0
+  debugLatticeCells: 0
 --- !u!23 &886720930
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -2290,6 +2302,8 @@ MonoBehaviour:
   mass: 5
   distanceCompliance: 0.000001
   volumeCompliance: 0.00000001
+  debugCollisionMesh: 1
+  debugLatticeCells: 0
 --- !u!23 &940437702
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -2402,6 +2416,8 @@ MonoBehaviour:
   mass: 5
   distanceCompliance: 0.000001
   volumeCompliance: 0.00000001
+  debugCollisionMesh: 0
+  debugLatticeCells: 0
 --- !u!23 &1016834308
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -2576,6 +2592,8 @@ MonoBehaviour:
   mass: 5
   distanceCompliance: 0.000001
   volumeCompliance: 0.00000001
+  debugCollisionMesh: 0
+  debugLatticeCells: 0
 --- !u!23 &1253889994
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -3129,6 +3147,8 @@ MonoBehaviour:
   mass: 5
   distanceCompliance: 0.000001
   volumeCompliance: 0.00000001
+  debugCollisionMesh: 0
+  debugLatticeCells: 0
 --- !u!23 &1616035968
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -3211,7 +3231,7 @@ Transform:
   m_GameObject: {fileID: 1628919374}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 4.28538, y: -0, z: -4.78234}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -3273,6 +3293,8 @@ MonoBehaviour:
   mass: 5
   distanceCompliance: 0.000001
   volumeCompliance: 0.00000001
+  debugCollisionMesh: 0
+  debugLatticeCells: 0
 --- !u!23 &1635166697
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -3497,6 +3519,8 @@ MonoBehaviour:
   mass: 1000
   distanceCompliance: 0.000001
   volumeCompliance: 0.00000001
+  debugCollisionMesh: 1
+  debugLatticeCells: 0
 --- !u!23 &1981499219
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -3655,6 +3679,8 @@ MonoBehaviour:
   mass: 5
   distanceCompliance: 0.000001
   volumeCompliance: 0.00000001
+  debugCollisionMesh: 0
+  debugLatticeCells: 0
 --- !u!23 &2038026942
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -3856,7 +3882,7 @@ Transform:
   m_GameObject: {fileID: 4652372680364437531}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalPosition: {x: 0, y: 3.49, z: 3.21}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children:
@@ -4104,8 +4130,10 @@ MonoBehaviour:
     z: 6
   subLatticeMultiplier: 2
   mass: 1
-  distanceCompliance: 0.001
+  distanceCompliance: 0.005
   volumeCompliance: 0.000001
+  debugCollisionMesh: 1
+  debugLatticeCells: 0
 --- !u!33 &8967941692223513860
 MeshFilter:
   m_ObjectHideFlags: 0
@@ -4128,13 +4156,15 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ObjectInstanceManager
   collisionMesh: {fileID: 2534964839176971238, guid: 173c464fa5d114ef38eb42719d177bed, type: 3}
   latticeDimensions:
-    x: 10
-    y: 8
-    z: 10
-  subLatticeMultiplier: 3
-  mass: 100
-  distanceCompliance: 0.001
-  volumeCompliance: 0.0000001
+    x: 6
+    y: 5
+    z: 6
+  subLatticeMultiplier: 6
+  mass: 20
+  distanceCompliance: 0.005
+  volumeCompliance: 0.0001
+  debugCollisionMesh: 1
+  debugLatticeCells: 0
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

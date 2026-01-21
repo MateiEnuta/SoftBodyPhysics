@@ -383,6 +383,35 @@ public struct PointTriCollision : IJob
                 SolveStaticCollision(p, previousPosition, ref currentPosition, t);
             }
         }
+
+        // for (int p = 0; p < collisionVertices.Length; p++)
+        // {
+        //     CollisionVertex cv = collisionVertices[p];
+        //     float4 bary = cv.baryCoords;
+        //     int4 tetIdx = cv.tetraIdx;
+        //     float3 currentPosition = bary.x * particles[tetIdx.x].position +
+        //                              bary.y * particles[tetIdx.y].position +
+        //                              bary.z * particles[tetIdx.z].position +
+        //                              bary.w * particles[tetIdx.w].position;
+
+        //     if (currentPosition.y > 0) continue;
+
+        //     UpdateParticlePos(cv, new float3(0, -currentPosition.y, 0));
+        // } 
+
+        // for (int i = 0; i < particles.Length; i++)
+        // {
+        //     Particle p = particles[i];
+        //     if (p.massSum > 0f)
+        //     {
+        //         p.position += p.collisionDelta / p.massSum;
+        //     }
+
+        //     p.collisionDelta = float3.zero;
+        //     p.massSum = 0;
+
+        //     particles[i] = p;
+        // }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -459,19 +488,40 @@ public struct PointTriCollision : IJob
         float3 CGrad = -cTriBary.z * triNormal;
 
         float sumWeightedGradients = 0;
-        sumWeightedGradients += cvP.invMass;
-        sumWeightedGradients += (cTriBary.x * cTriBary.x) * cv0.invMass;
-        sumWeightedGradients += (cTriBary.y * cTriBary.y) * cv1.invMass;
-        sumWeightedGradients += (cTriBary.z * cTriBary.z) * cv2.invMass;
+        sumWeightedGradients += ColParticleInvMass(cvP);
+        sumWeightedGradients += (cTriBary.x * cTriBary.x) * ColParticleInvMass(cv0);
+        sumWeightedGradients += (cTriBary.y * cTriBary.y) * ColParticleInvMass(cv1);
+        sumWeightedGradients += (cTriBary.z * cTriBary.z) * ColParticleInvMass(cv2);
 
         float deltaLambda = -Con / sumWeightedGradients;
 
-        UpdateParticePos(cvP, cvP.invMass * deltaLambda * pGrad);
-        currentP += cvP.invMass * deltaLambda * pGrad;
+        UpdateParticlePos(cvP, ColParticleInvMass(cvP) * deltaLambda * pGrad);
+        currentP += ColParticleInvMass(cvP) * deltaLambda * pGrad;
 
-        UpdateParticePos(cv0, cv0.invMass * deltaLambda * AGrad);
-        UpdateParticePos(cv1, cv1.invMass * deltaLambda * BGrad);
-        UpdateParticePos(cv2, cv2.invMass * deltaLambda * CGrad);
+        UpdateParticlePos(cv0, ColParticleInvMass(cv0) * deltaLambda * AGrad);
+        UpdateParticlePos(cv1, ColParticleInvMass(cv1) * deltaLambda * BGrad);
+        UpdateParticlePos(cv2, ColParticleInvMass(cv2) * deltaLambda * CGrad);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private float ColParticleInvMass(CollisionVertex cv)
+    {
+        // Indices of the tetra particles
+        int i0 = cv.tetraIdx.x;
+        int i1 = cv.tetraIdx.y;
+        int i2 = cv.tetraIdx.z;
+        int i3 = cv.tetraIdx.w;
+
+        float4 b = cv.baryCoords;
+
+        // Calculate mass
+        float mass = 0;
+        mass += 1f / particles[i0].invMass * b.x;
+        mass += 1f / particles[i1].invMass * b.y;
+        mass += 1f / particles[i2].invMass * b.z;
+        mass += 1f / particles[i3].invMass * b.w;
+
+        return 1f / mass;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -480,49 +530,80 @@ public struct PointTriCollision : IJob
         float3 cT1 = staticColPoints[staticColTriangles[triangleIdx].x];
         float3 cT2 = staticColPoints[staticColTriangles[triangleIdx].y];
         float3 cT3 = staticColPoints[staticColTriangles[triangleIdx].z];
-        if (IntersectSegmentTriangleAndSlide(previousPosition, currentPosition,
-            cT1, cT2, cT3, out float3 hitPoint, out float3 slideEnd
-        ))
-        {
-            // Small normal offset
-            float3 normalOffset = math.normalize(math.cross(cT2 - cT1, cT3 - cT1)) * 0.001f;
-            float3 newCPos = slideEnd + normalOffset;
+        // if (IntersectSegmentTriangleAndSlide(previousPosition, currentPosition,
+        //     cT1, cT2, cT3, out float3 _, out float3 slideEnd
+        // ))
+        // {
+        //     // Small normal offset
+        //     float3 normalOffset = math.normalize(math.cross(cT2 - cT1, cT3 - cT1)) * 0.001f;
+        //     float3 newCPos = slideEnd + normalOffset;
 
-            // Compute correction based on the difference between 
-            float3 correction = newCPos - currentPosition;
+        //     // Compute correction based on the difference between 
+        //     float3 correction = newCPos - currentPosition;
             
-            // Update actual particles positions
-            CollisionVertex cv = collisionVertices[p];
-            UpdateParticePos(cv, correction);
-            // Update collision vertex positions for subsequent CCD
-            currentPosition = newCPos;
-        }
+        //     // Update actual particles positions
+        //     CollisionVertex cv = collisionVertices[p];
+        //     UpdateParticlePos(cv, correction);
+        //     // Update collision vertex positions for subsequent CCD
+        //     currentPosition = newCPos;
+        // }
+    
+        // Find the closest point on tri to particle vel
+        float3 pVelocityOffser = currentPosition - previousPosition;
+        float3 hitPoint = ClosestPointOnTriangleBarycentric(previousPosition, cT1, cT2, cT3, out float3 triBary);
+
+        // Paritcle to hit point data
+        float3 hitOffset = hitPoint - previousPosition;
+        float hitDis = math.length(hitOffset);
+        float3 hitDir = hitOffset / hitDis;
+
+        float totalDistance = hitDis - math.dot(hitDir, pVelocityOffser);
+
+        // Discard the collision if speculative fails
+        if (totalDistance > 0.01f) return;
+
+
+        float3 triNormal = math.normalize(math.cross(cT2 - cT1, cT3 - cT1));
+        float penetration = math.dot(currentPosition - cT1, triNormal) - 0.001f;
+        if (penetration >= 0f) return;
+
+        CollisionVertex cv = collisionVertices[p];
+        UpdateParticlePos(cv, -penetration * triNormal);
+        currentPosition += -penetration * triNormal;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void UpdateParticePos(CollisionVertex cv, float3 correction)
+    private void UpdateParticlePos(CollisionVertex cv, float3 correction)
     {
         // Indices of the tetra particles
         int i0 = cv.tetraIdx.x;
         int i1 = cv.tetraIdx.y;
         int i2 = cv.tetraIdx.z;
         int i3 = cv.tetraIdx.w;
+
+        float4 b = cv.baryCoords;
+        // b = new float4(1, 1, 1, 1);
+
+        float denom = b.x*b.x + b.y*b.y + b.z*b.z + b.w*b.w;
+        if (denom < 1e-08f) return;
+
+        correction /= denom;
         
         // Update actual particles positions
         Particle p0 = particles[i0];
-        p0.position += correction;
+        p0.position += b.x * correction;
         particles[i0] = p0;
 
         Particle p1 = particles[i1];
-        p1.position += correction;
+        p1.position += b.y * correction;
         particles[i1] = p1;
 
         Particle p2 = particles[i2];
-        p2.position += correction;
+        p2.position += b.z * correction;
         particles[i2] = p2;
 
         Particle p3 = particles[i3];
-        p3.position += correction;
+        p3.position += b.w * correction;
         particles[i3] = p3;
     }
 
@@ -726,12 +807,15 @@ public struct PointTriCollision : IJob
 public struct SoftBodyData
 {
     public ObjectInstanceManager instanceManager;
-    public int verticesStartIndex;
+    public int verticesStartIndex, particlesStartIndex, particleCount;
 
-    public SoftBodyData(ObjectInstanceManager instanceManager, int verticesStartIndex)
+    public SoftBodyData(ObjectInstanceManager instanceManager, int verticesStartIndex, 
+        int particlesStartIndex, int particleCount)
     {
         this.instanceManager = instanceManager;
         this.verticesStartIndex = verticesStartIndex;
+        this.particlesStartIndex = particlesStartIndex;
+        this.particleCount = particleCount;
     }
 }
 
@@ -740,6 +824,8 @@ public struct Particle
 {
     public float3 position, previousPosition, velocity;
     public float invMass;
+    public float3 collisionDelta;
+    public float massSum;
 
     public Particle(float3 position, float invMass)
     {
@@ -747,6 +833,8 @@ public struct Particle
         this.invMass = invMass;
 
         previousPosition = velocity = float3.zero;
+        collisionDelta = float3.zero;
+        massSum = 0;
     }
 }
 
@@ -960,8 +1048,11 @@ public class JobPhysicsSolver : MonoBehaviour
         // Push updated vertex data into each soft body's mesh instance
         for (int i = 0; i < softBodies.Count; i++)
         {
-            softBodies[i].instanceManager.UpdateMesh(viualVerticesPos.AsArray(),
-                                                    softBodies[i].verticesStartIndex);
+            softBodies[i].instanceManager.UpdateMesh(
+                viualVerticesPos, softBodies[i].verticesStartIndex,
+                particles, softBodies[i].particlesStartIndex,
+                softBodies[i].particleCount
+            );
         }
     }
 #endregion
@@ -969,7 +1060,7 @@ public class JobPhysicsSolver : MonoBehaviour
 #region Object addition
     public void AddSoftBody(
         ObjectInstanceManager objectManager,
-        float bodyMass,
+        float bodyMass, List<float> particleMasses,
         float bodyDisCompliance,
         float bodyVolCompliance,
         List<float3> bodyParticles,
@@ -985,17 +1076,16 @@ public class JobPhysicsSolver : MonoBehaviour
     {
         if (!initialised) InitialiseSolver();
 
-        // Register new soft body instance
-        int verticesOffset = viualVerticesPos.Length;
-        softBodies.Add(new SoftBodyData(objectManager, verticesOffset));
-        
-
         // Add all particles belonging to the body
         int particlesOffset = particles.Length;
-        float particleInvMass = 1f / (bodyMass / bodyParticles.Count);
+        // float particleInvMass = 1f / (bodyMass / bodyParticles.Count);
+
+        // Register new soft body instance
+        int verticesOffset = viualVerticesPos.Length;
+        softBodies.Add(new SoftBodyData(objectManager, verticesOffset, particlesOffset, bodyParticles.Count));
 
         for (int i = 0; i < bodyParticles.Count; i++)
-            particles.Add(new Particle(bodyParticles[i], particleInvMass));
+            particles.Add(new Particle(bodyParticles[i], 1f / particleMasses[i]));
         
 
         // Add empty vertex entries + trilinear mapping
