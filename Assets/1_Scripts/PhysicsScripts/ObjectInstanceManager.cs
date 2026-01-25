@@ -106,7 +106,7 @@ public class ObjectInstanceManager : MonoBehaviour
     // Collision mesh data
     private CollisionVertex[] collisionVertices;
     private int3[] collisionTriangles;
-    private int2[] collisionEdges;
+    private int4[] collisionEdges;
     // Lattice mesh data
     private List<int3> latticeCollisionTriangles;
     private List<int2> latticeCollisionEdges;
@@ -605,7 +605,8 @@ public class ObjectInstanceManager : MonoBehaviour
 
         // Assign triangles and edges
         collisionTriangles = new int3[colMeshTris.Length / 3];
-        HashSet<int2> edgeHash = new HashSet<int2>();
+        Dictionary<int2, int> edgeHash = new Dictionary<int2, int>();
+        List<int4> auxEdgeList = new List<int4>();
         for (int i = 0; i < colMeshTris.Length / 3; i++)
         {
             // Get the coresponding triangle vertex indexes
@@ -617,13 +618,26 @@ public class ObjectInstanceManager : MonoBehaviour
             collisionTriangles[i] = new int3(i0, i1, i2);
 
             // Adds the edges with ascending order in the hash
-            edgeHash.Add(i0 < i1 ? new int2(i0, i1) : new int2(i1, i0));
-            edgeHash.Add(i1 < i2 ? new int2(i1, i2) : new int2(i2, i1));
-            edgeHash.Add(i2 < i0 ? new int2(i2, i0) : new int2(i0, i2));
+            AddEdge(i0, i1, i2, edgeHash, auxEdgeList);
+            AddEdge(i1, i2, i0, edgeHash, auxEdgeList);
+            AddEdge(i2, i0, i1, edgeHash, auxEdgeList);
         }
 
-        // Assigns edges
-        collisionEdges = edgeHash.ToArray();
+        collisionEdges = auxEdgeList.ToArray();
+    }
+
+    private void AddEdge(int i0, int i1, int i2, 
+        Dictionary<int2, int> edgeHash, List<int4> auxEdgeList)
+    {
+        if (edgeHash.TryGetValue(new int2(i1, i0), out int index))
+        {
+            auxEdgeList[index] = new int4(auxEdgeList[index].xyz, i2);
+        }
+        else 
+        {
+            edgeHash.Add(new int2(i0, i1), auxEdgeList.Count);
+            auxEdgeList.Add(new int4(i0, i1, i2, -1));
+        }
     }
 
 #region Triangle Fill
