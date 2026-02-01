@@ -348,22 +348,20 @@ public struct PointTriCollision : IJob
 {
     // Dynamic bodies
     public NativeArray<Particle> particles;
-    public NativeArray<CollisionVertex> collisionVertices;
-    public NativeArray<int3> collisionTriangles;
-    public NativeArray<int4> collisionEdges;
+    [ReadOnly] public NativeArray<CollisionVertex> collisionVertices;
+    [ReadOnly] public NativeArray<int3> collisionTriangles;
+    [ReadOnly] public NativeArray<int4> collisionEdges;
 
     // Static bodies
-    public NativeArray<float3> staticColPoints;
-    public NativeArray<int3> staticColTriangles;
-    public NativeArray<int4> staticCollisionEdges;
+    [ReadOnly] public NativeArray<float3> staticColPoints;
+    [ReadOnly] public NativeArray<int3> staticColTriangles;
+    [ReadOnly] public NativeArray<int4> staticCollisionEdges;
 
     public void Execute()
     {
         for (int p = 0; p < collisionVertices.Length; p++)
         {
             CollisionVertex cv = collisionVertices[p];
-            float4 bary = cv.baryCoords;
-            int4 tetIdx = cv.tetraIdx;
             float3 previousPosition = GetPositionsThroughBary(cv, true);
             float3 currentPosition = GetPositionsThroughBary(cv, false);
 
@@ -407,7 +405,9 @@ public struct PointTriCollision : IJob
                     cv1E1,
                     cv2E1,
                     cv1E2,
-                    cv2E2
+                    cv2E2,
+                    collisionEdges[e1].zw,
+                    collisionEdges[e2].zw
                 );
             }
         }
@@ -432,79 +432,116 @@ public struct PointTriCollision : IJob
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void SolveDynamicEdgeCollision(
-        float3 previous1E1,
-        ref float3 current1E1,
-        float3 previous2E1,
-        ref float3 current2E1,
+        float3 u1_prev,
+        ref float3 u1_curr,
+        float3 u2_prev,
+        ref float3 u2_curr,
         CollisionVertex cv1E1,
         CollisionVertex cv2E1,
         CollisionVertex cv1E2,
-        CollisionVertex cv2E2
+        CollisionVertex cv2E2,
+        int2 collidingEdgeTri,
+        int2 edgeTri
     )
     {
-        float3 previous1E2 = GetPositionsThroughBary(cv1E2, true);
-        float3 current1E2 = GetPositionsThroughBary(cv1E2, false);
-        float3 previous2E2 = GetPositionsThroughBary(cv2E2, true);
-        float3 current2E2 = GetPositionsThroughBary(cv2E2, false);
+        float3 v1_prev = GetPositionsThroughBary(cv1E2, true);
+        float3 v1_curr = GetPositionsThroughBary(cv1E2, false);
+        float3 v2_prev = GetPositionsThroughBary(cv2E2, true);
+        float3 v2_curr = GetPositionsThroughBary(cv2E2, false);
+
+        if (!EdgeSpeculativeCheck(u1_curr, u2_curr, u1_prev, u2_prev, v1_curr, v2_curr, v1_prev, v2_prev)) return;
+
 
         LineLineSeparation(
-            previous1E1, previous2E1, previous1E2, previous2E2, 
+            u1_curr, u2_curr, v1_curr, v2_curr, 
             out float t1, out float t2
         );
 
-        float3 u = previous2E1 - previous1E1;
-        float3 v = previous2E2 - previous1E2;
+        float3 u = u2_curr - u1_curr;
+        float3 v = v2_curr - v1_curr;
 
-        float3 clampedSeparation =  (previous1E2 + t2 * v) - (previous1E1 + t1 * u);
+        float3 pOnU = u1_curr + t1 * u;
+        float3 pOnV = v1_curr + t2 * v;
 
-        float3 edge1Velocity = (current1E1 * t1 + current2E1 * (1f - t1)) - (previous1E1 * t1 + previous2E1 * (1f - t1));
-        float3 edge2Velocity = (current1E2 * t2 + current2E2 * (1f - t2)) - (previous1E2 * t2 + previous2E2 * (1f - t2));
+        float3 velOnU = t1 * (u1_curr - u1_prev) + (1f - t1) * (u2_curr - u2_prev);
+        float3 velOnV = t2 * (v1_curr - v1_prev) + (1f - t2) * (v2_curr - v2_prev);
 
-        float clampedSepLength = math.length(clampedSeparation);
-        if (clampedSepLength < 1e-08f) return;
-        float3 clampedSepDir = clampedSeparation / clampedSepLength;
+        float3 corr = pOnV - pOnU;
+        float corrLength = math.length(corr);
+        if (corrLength <= 1e-08f) return;
+        float3 corrDir = corr / corrLength;
 
-        float totalDistance = clampedSepLength - math.dot(edge1Velocity, clampedSepDir) + math.dot(edge2Velocity, clampedSepDir);
-        // Discard if speculative fails
-        if (totalDistance > 0.01f) return;
+        // Difference between the 2 previous positions
+        float3 difPrevUV = (pOnV - velOnV) - (pOnU - velOnU);
+        float lengthPrevUV = math.length(difPrevUV);
+        float3 dirPrevUV = difPrevUV / lengthPrevUV;
+
+        float3 relVel = velOnV - velOnU;
+        float relVelToPrevUV = math.dot(relVel, dirPrevUV);
+
+        float totalDistance = lengthPrevUV - relVelToPrevUV;
+        if (totalDistance > -0.01f) return;
 
 
-        float3 separation = LineLineSeparation(
-            current1E1, current2E1, current1E2, current2E2, 
-            out t1, out t2
-        );
 
-        float Con = math.length(separation);
-        if (Con < 1e-08f) return;
+        // Apply correction step
+        float C = corrLength - 0.01f;
 
-        float3 separationDir = separation / Con;
-        float3 E11Grad = -t1 * separationDir;
-        float3 E21Grad = -(1f - t1) * separationDir;
-        float3 E12Grad = t2 * separationDir;
-        float3 E22Grad = (1f - t2) * separationDir;
+        float3 u1Grad =  t1        * corrDir;
+        float3 u2Grad =  (1f - t1) * corrDir;
+        float3 v1Grad = -t2        * corrDir;
+        float3 v2Grad = -(1f - t2) * corrDir;
 
-        // Store inverse mass
-        float invMassE11 = ColParticleInvMass(cv1E1);
-        float invMassE21 = ColParticleInvMass(cv2E1);
-        float invMassE12 = ColParticleInvMass(cv1E2);
-        float invMassE22 = ColParticleInvMass(cv2E2);
+        float u1InvMass = ColParticleInvMass(cv1E1);
+        float u2InvMass = ColParticleInvMass(cv2E1);
+        float v1InvMass = ColParticleInvMass(cv1E2);
+        float v2InvMass = ColParticleInvMass(cv2E2);
 
         float sumWeightedGradients = 0;
-        sumWeightedGradients += invMassE11 * (t1 * t1);
-        sumWeightedGradients += invMassE21 * ((1f - t1) * (1f - t1));
-        sumWeightedGradients += invMassE12 * (t2 * t2);
-        sumWeightedGradients += invMassE22 * ((1f - t2) * (1f - t2));
+        sumWeightedGradients += u1InvMass * (t1 * t1);
+        sumWeightedGradients += u2InvMass * ((1f - t1) * (1f - t1));
+        sumWeightedGradients += v1InvMass * (t2 * t2);
+        sumWeightedGradients += v2InvMass * ((1f - t2) * (1f - t2));
         if (sumWeightedGradients < 1e-08f) return;
 
-        // Calcualte dLambda
-        float deltaLambda = -Con / sumWeightedGradients;
+        float deltaLambda = C / sumWeightedGradients;
 
-        UpdateParticlePos(cv1E1, invMassE11 * deltaLambda * E11Grad);
-        current1E1 += invMassE11 * deltaLambda * E11Grad;
-        UpdateParticlePos(cv2E1, invMassE21 * deltaLambda * E21Grad);
-        current2E1 += invMassE21 * deltaLambda * E21Grad;
-        UpdateParticlePos(cv1E2, invMassE12 * deltaLambda * E12Grad);
-        UpdateParticlePos(cv2E2, invMassE22 * deltaLambda * E22Grad);
+        UpdateParticlePos(cv1E1, u1InvMass * deltaLambda * u1Grad);
+        u1_curr +=               u1InvMass * deltaLambda * u1Grad;
+        UpdateParticlePos(cv2E1, u2InvMass * deltaLambda * u2Grad);
+        u2_curr +=               u2InvMass * deltaLambda * u2Grad;
+        UpdateParticlePos(cv1E2, v1InvMass * deltaLambda * v1Grad);
+        UpdateParticlePos(cv2E2, v2InvMass * deltaLambda * v2Grad);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool EdgeSpeculativeCheck(
+        float3 u1_curr, float3 u2_curr,
+        float3 u1_prev, float3 u2_prev,
+        float3 v1_curr, float3 v2_curr,
+        float3 v1_prev, float3 v2_prev)
+    {
+        LineLineSeparation(u1_prev, u2_prev, v1_prev, v2_prev,
+            out float t1, out float t2
+        );
+
+        float3 u = u2_prev - u1_prev;
+        float3 v = v2_prev - v1_prev;
+
+        float3 pOnU = u1_prev + t1 * u;
+        float3 pOnV = v1_prev + t2 * v;
+
+        float3 velOnU = t1 * (u1_curr - u1_prev) + (1f - t1) * (u2_curr - u2_prev);
+        float3 velOnV = t2 * (v1_curr - v1_prev) + (1f - t2) * (v2_curr - v2_prev);
+        float3 relVelToU = velOnV - velOnU;
+
+        float3 separation = pOnV - pOnU;
+        float sepLength = math.length(separation);
+        if (sepLength <= 0.01f) return true;
+        float3 sepDir = separation / sepLength;
+
+        float totalDistance = sepLength - math.dot(relVelToU, sepDir);
+        return totalDistance <= 0.01f;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -521,31 +558,13 @@ public struct PointTriCollision : IJob
         CollisionVertex cv1 = collisionVertices[tri.y];
         CollisionVertex cv2 = collisionVertices[tri.z];
 
-        float3 A = cv0.baryCoords.x * particles[cv0.tetraIdx.x].previousPosition +
-                   cv0.baryCoords.y * particles[cv0.tetraIdx.y].previousPosition +
-                   cv0.baryCoords.z * particles[cv0.tetraIdx.z].previousPosition +
-                   cv0.baryCoords.w * particles[cv0.tetraIdx.w].previousPosition;
-        float3 B = cv1.baryCoords.x * particles[cv1.tetraIdx.x].previousPosition +
-                   cv1.baryCoords.y * particles[cv1.tetraIdx.y].previousPosition +
-                   cv1.baryCoords.z * particles[cv1.tetraIdx.z].previousPosition +
-                   cv1.baryCoords.w * particles[cv1.tetraIdx.w].previousPosition;
-        float3 C = cv2.baryCoords.x * particles[cv2.tetraIdx.x].previousPosition +
-                   cv2.baryCoords.y * particles[cv2.tetraIdx.y].previousPosition +
-                   cv2.baryCoords.z * particles[cv2.tetraIdx.z].previousPosition +
-                   cv2.baryCoords.w * particles[cv2.tetraIdx.w].previousPosition;
+        float3 A = GetPositionsThroughBary(cv0, true);
+        float3 B = GetPositionsThroughBary(cv1, true);
+        float3 C = GetPositionsThroughBary(cv2, true);
 
-        float3 cA = cv0.baryCoords.x * particles[cv0.tetraIdx.x].position +
-                    cv0.baryCoords.y * particles[cv0.tetraIdx.y].position +
-                    cv0.baryCoords.z * particles[cv0.tetraIdx.z].position +
-                    cv0.baryCoords.w * particles[cv0.tetraIdx.w].position;
-        float3 cB = cv1.baryCoords.x * particles[cv1.tetraIdx.x].position +
-                    cv1.baryCoords.y * particles[cv1.tetraIdx.y].position +
-                    cv1.baryCoords.z * particles[cv1.tetraIdx.z].position +
-                    cv1.baryCoords.w * particles[cv1.tetraIdx.w].position;
-        float3 cC = cv2.baryCoords.x * particles[cv2.tetraIdx.x].position +
-                    cv2.baryCoords.y * particles[cv2.tetraIdx.y].position +
-                    cv2.baryCoords.z * particles[cv2.tetraIdx.z].position +
-                    cv2.baryCoords.w * particles[cv2.tetraIdx.w].position;
+        float3 cA = GetPositionsThroughBary(cv0, false);
+        float3 cB = GetPositionsThroughBary(cv1, false);
+        float3 cC = GetPositionsThroughBary(cv2, false);
 
         // Find the closest point on tri to particle vel
         float3 pVelocityOffser = currentP - previousP;
@@ -827,7 +846,7 @@ public struct PointTriCollision : IJob
     // p1,p2 define line 1; p3,p4 define line 2.
     // Returns separation vector between the *clamped* closest points.
     // t1Clamp, t2Clamp are interpolation parameters clamped to [0,1].
-    public static float3 LineLineSeparation(
+    public void LineLineSeparation(
         float3 p1, float3 p2,
         float3 p3, float3 p4,
         out float t1Clamp, out float t2Clamp)
@@ -862,14 +881,6 @@ public struct PointTriCollision : IJob
         // Clamp to [0,1] to treat them as segments/rays
         t1Clamp = math.clamp(s, 0f, 1f);
         t2Clamp = math.clamp(t, 0f, 1f);
-
-        float3 pOn1 = p1 + s * u;
-        float3 pOn2 = p3 + t * v;
-
-        // Separation vector: apply +0.5*sep to line 1, -0.5*sep to line 2, etc.
-        float3 separation = pOn2 - pOn1;
-
-        return separation;
     }
 }
 

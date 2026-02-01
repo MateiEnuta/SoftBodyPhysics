@@ -1,29 +1,42 @@
+using Unity.Mathematics;
 using UnityEngine;
 
 // Runs in Edit mode too (so you can step without pressing Play).
 [ExecuteAlways]
 public class PbdPointTriangleGizmoStepper : MonoBehaviour
 {
+    public enum CollisionMode
+    {
+        PointTriangle,
+        EdgeEdge
+    }
+
+    [Header("Collision Mode")]
+    public CollisionMode collisionMode = CollisionMode.PointTriangle;
+
     [Header("Scene Handles (optional)")]
     public Transform pointT;
     public Transform aT;
     public Transform bT;
     public Transform cT;
+    public Transform dT;
 
     [Header("Simulation State")]
     public Vector3 pointPos = new Vector3(0, 1, 0);
     public Vector3 aPos     = new Vector3(-0.5f, 0, -0.5f);
     public Vector3 bPos     = new Vector3( 0.5f, 0, -0.5f);
     public Vector3 cPos     = new Vector3( 0.0f, 0,  0.5f);
+    public Vector3 dPos = new Vector3(1.0f, 0, 0.5f);
 
     public Vector3 pointVel = new Vector3(0, -1, 0);
-    public Vector3 aVel, bVel, cVel;
+    public Vector3 aVel, bVel, cVel, dVel;
 
     [Header("Mass (inverse mass: 0 = static)")]
     public float pointInvMass = 1.0f;
     public float aInvMass = 1.0f;
     public float bInvMass = 1.0f;
     public float cInvMass = 1.0f;
+    public float dInvMass = 1.0f;
 
     [Header("Collision / Solver")]
     public float dt = 1.0f / 60.0f;
@@ -70,15 +83,31 @@ public class PbdPointTriangleGizmoStepper : MonoBehaviour
         Vector3 A = aPos + aVel * dt;
         Vector3 B = bPos + bVel * dt;
         Vector3 C = cPos + cVel * dt;
+        Vector3 D = dPos + dVel * dt;
 
-        SolveAttachment(ref A, initialaPos, simulatedCompliance, Time.deltaTime);
-        SolveAttachment(ref B, initialbPos, simulatedCompliance, Time.deltaTime);
-        SolveAttachment(ref C, initialcPos, simulatedCompliance, Time.deltaTime);
+        if (collisionMode == CollisionMode.PointTriangle)
+        {
+            SolveAttachment(ref A, initialaPos, simulatedCompliance, Time.deltaTime);
+            SolveAttachment(ref B, initialbPos, simulatedCompliance, Time.deltaTime);
+            SolveAttachment(ref C, initialcPos, simulatedCompliance, Time.deltaTime);
+        }
+        // else
+        // {
+        //     SolveAttachment(ref A, initialaPos, simulatedCompliance, Time.deltaTime);
+        //     SolveAttachment(ref B, initialbPos, simulatedCompliance, Time.deltaTime);
+        // }
 
         // 3) Solve collision by projection (can run multiple iterations).
         for (int it = 0; it < Mathf.Max(1, solverIterations); it++)
         {
-            SolvePointTriangle(ref p, ref A, ref B, ref C);
+            if (collisionMode == CollisionMode.PointTriangle)
+            {
+                SolvePointTriangle(ref p, ref A, ref B, ref C);
+            }
+            else // EdgeEdge
+            {
+                SolveEdgeEdge(ref A, ref B, ref C, ref D);
+            }
         }
 
         // 4) Commit positions and update velocities (simple finite difference).
@@ -86,8 +115,9 @@ public class PbdPointTriangleGizmoStepper : MonoBehaviour
         aVel = (A - aPos) / dt;
         bVel = (B - bPos) / dt;
         cVel = (C - cPos) / dt;
+        dVel = (D - dPos) / dt;
 
-        pointPos = p; aPos = A; bPos = B; cPos = C;
+        pointPos = p; aPos = A; bPos = B; cPos = C; dPos = D;
 
         // 5) Push back into transforms.
         SyncToTransforms();
@@ -179,6 +209,85 @@ public class PbdPointTriangleGizmoStepper : MonoBehaviour
         C += cInvMass * dl * CGrad;
     }
 
+    void SolveEdgeEdge(ref Vector3 A, ref Vector3 B, ref Vector3 C, ref Vector3 D)
+    {
+        float t1Clamp, t2Clamp;
+        Vector3 sepNow = LineLineSeparationUnity(A, B, C, D, out t1Clamp, out t2Clamp);
+        float distNow = sepNow.magnitude;
+        if (distNow < 1e-8f)
+            return;
+
+        Vector3 n = sepNow / distNow;
+
+        // Signed constraint now
+        float Cnow = distNow - skin;
+
+        // Interpolated velocities at the current closest points
+        Vector3 vA = aVel;
+        Vector3 vB = bVel;
+        Vector3 vC = cVel;
+        Vector3 vD = dVel;
+
+        Vector3 P1 = vA * (1f - t1Clamp) + vB * t1Clamp;
+        Vector3 P2 = vC * (1f - t2Clamp) + vD * t2Clamp;
+
+        Vector3 relVel = P2 - P1;
+        float relAlongN = Vector3.Dot(relVel, n);
+
+        // Predict distance and constraint at end of step
+        float distPred = distNow + relAlongN * dt;
+        float Cpred = distPred + skin;
+        
+        float totalDistance = Cnow - relAlongN * dt;
+        if (totalDistance > 0.01f) return;    // re-check; only solve if positive
+
+
+        // Use your function (convert to float3 if using Unity.Mathematics, or adapt types)
+        Vector3 sep = LineLineSeparationUnity(A, B, C, D, out t1Clamp, out t2Clamp);
+
+        float Con = sep.magnitude;
+        if (Con < 1e-8f) return;
+
+        n = sep / Con;
+
+        // Contact points on each segment (using clamped t’s)
+        P1 = A + t1Clamp * (B - A);
+        P2 = C + t2Clamp * (D - C);
+
+        // We want a minimum separation = skin
+        float Cdist = Con + skin;
+        if (Cdist <= 0f) return; // already separated by >= skin; only push if overlapping
+
+        // Gradients (distance between two points on two segments)
+        // p1 = A + t1*(B-A), p2 = C + t2*(D-C), C = |p2 - p1|
+        // ∂C/∂A = -(1 - t1)*n, ∂C/∂B = -t1*n, ∂C/∂C = (1 - t2)*n, ∂C/∂D = t2*n
+        Vector3 AGrad = -(1f - t1Clamp) * n;
+        Vector3 BGrad = -t1Clamp * n;
+        Vector3 CGrad = (1f - t2Clamp) * n;
+        Vector3 DGrad = t2Clamp * n;
+
+        float denom = 0f;
+        denom += aInvMass * (1f - t1Clamp) * (1f - t1Clamp);
+        denom += bInvMass * (t1Clamp * t1Clamp);
+        denom += cInvMass * (1f - t2Clamp) * (1f - t2Clamp);
+        denom += dInvMass * (t2Clamp * t2Clamp);
+        if (denom < 1e-12f) return;
+
+        float dl = -Cdist / denom;
+
+        A += aInvMass * dl * AGrad;
+        B += bInvMass * dl * BGrad;
+        C += cInvMass * dl * CGrad;
+        D += dInvMass * dl * DGrad;
+
+        // Debug (reuse your fields)
+        lastClosest = (P1 + P2) * 0.5f;
+        lastN = n;
+        lastC = Cdist;
+        lastBary = new Vector3(t1Clamp, t2Clamp, 0f); // store t's for inspection
+    }
+
+
     // Ericson-style closest point with barycentric output (clamped to triangle).
     static Vector3 ClosestPointOnTriangleBarycentric(Vector3 p, Vector3 a, Vector3 b, Vector3 c, out Vector3 bary)
     {
@@ -255,33 +364,106 @@ public class PbdPointTriangleGizmoStepper : MonoBehaviour
         return a + ab * v2 + ac * w2;
     }
 
+    // Wrapper around your float3 version
+    static Vector3 LineLineSeparationUnity(
+        Vector3 p1, Vector3 p2, Vector3 p3, Vector3 p4,
+        out float t1Clamp, out float t2Clamp)
+    {
+        float3 f1 = p1;
+        float3 f2 = p2;
+        float3 f3 = p3;
+        float3 f4 = p4;
+
+        float3 sep = LineLineSeparation(f1, f2, f3, f4, out t1Clamp, out t2Clamp);
+        return new Vector3(sep.x, sep.y, sep.z);
+    }
+
+    public static float3 LineLineSeparation(
+        float3 p1, float3 p2,
+        float3 p3, float3 p4,
+        out float t1Clamp, out float t2Clamp)
+    {
+        float3 u = p2 - p1;
+        float3 v = p4 - p3;
+        float3 w0 = p1 - p3;
+
+        float a = math.dot(u, u);
+        float b = math.dot(u, v);
+        float c = math.dot(v, v);
+        float d = math.dot(u, w0);
+        float e = math.dot(v, w0);
+
+        float denom = a * c - b * b;
+
+        float s, t;
+
+        // Unclamped parameters for infinite lines
+        if (math.abs(denom) < 1e-6f)
+        {
+            // Nearly parallel: pick one parameter, slide along v
+            s = 0f;
+            t = (c > 0f) ? (e / c) : 0f;
+        }
+        else
+        {
+            s = (b * e - c * d) / denom;
+            t = (a * e - b * d) / denom;
+        }
+
+        // Clamp to [0,1] to treat them as segments/rays
+        t1Clamp = math.clamp(s, 0f, 1f);
+        t2Clamp = math.clamp(t, 0f, 1f);
+
+        float3 pOn1 = p1 + s * u;
+        float3 pOn2 = p3 + t * v;
+
+        // Separation vector: apply +0.5*sep to line 1, -0.5*sep to line 2, etc.
+        float3 separation = pOn2 - pOn1;
+
+        return separation;
+    }
+
     void OnDrawGizmos()
     {
         // Ensure we have something to draw even in edit mode.
         if (!Application.isPlaying)
             SyncFromTransforms();
 
-        // Triangle
-        Gizmos.color = Color.white;
-        Gizmos.DrawLine(aPos, bPos);
-        Gizmos.DrawLine(bPos, cPos);
-        Gizmos.DrawLine(cPos, aPos);
+        if (collisionMode == CollisionMode.PointTriangle)
+        {
+            // Triangle
+            Gizmos.color = Color.white;
+            Gizmos.DrawLine(aPos, bPos);
+            Gizmos.DrawLine(bPos, cPos);
+            Gizmos.DrawLine(cPos, aPos);
 
-        // Point
-        Gizmos.color = Color.yellow;
-        Gizmos.DrawWireSphere(pointPos, 0.03f);
+            // Point
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawWireSphere(pointPos, 0.03f);
+        }
+        else
+        {
+            // Edge AB
+            Gizmos.color = Color.white;
+            Gizmos.DrawLine(aPos, bPos);
 
-        // Closest point and normal debug
+            // Edge CD
+            Gizmos.color = Color.gray;
+            Gizmos.DrawLine(cPos, dPos);
+        }
+
+        // Closest / normal
         Gizmos.color = Color.cyan;
         Gizmos.DrawWireSphere(lastClosest, 0.02f);
 
-        Gizmos.color = (lastC < 0f) ? Color.red : Color.green;
+        Gizmos.color = (lastC > 0f) ? Color.red : Color.green;
         Gizmos.DrawLine(lastClosest, lastClosest + lastN * 0.25f);
 
-        // Optional: visualize barycentric weights by tinting vertices
+        // Vertices
         Gizmos.color = new Color(1, 0, 0, 0.6f); Gizmos.DrawWireSphere(aPos, 0.02f);
         Gizmos.color = new Color(0, 1, 0, 0.6f); Gizmos.DrawWireSphere(bPos, 0.02f);
         Gizmos.color = new Color(0, 0, 1, 0.6f); Gizmos.DrawWireSphere(cPos, 0.02f);
+        Gizmos.color = new Color(1, 1, 0, 0.6f); Gizmos.DrawWireSphere(dPos, 0.02f);
     }
 
     void SyncFromTransforms()

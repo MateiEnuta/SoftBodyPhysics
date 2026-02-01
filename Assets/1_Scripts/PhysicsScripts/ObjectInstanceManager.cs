@@ -1405,6 +1405,25 @@ public class ObjectInstanceManager : MonoBehaviour
 
                 Gizmos.DrawSphere(pos, 0.05f);
             }
+
+            for (int i = 0; i < collisionEdges.Length; i++)
+            {
+                float4 b1 = collisionVertices[collisionEdges[i].x].baryCoords;
+                int4 idx1 = collisionVertices[collisionEdges[i].x].tetraIdx;
+                Vector3 pos1 = b1.x * particles[idx1.x] +
+                            b1.y * particles[idx1.y] +
+                            b1.z * particles[idx1.z] +
+                            b1.w * particles[idx1.w];
+
+                float4 b2 = collisionVertices[collisionEdges[i].y].baryCoords;
+                int4 idx2 = collisionVertices[collisionEdges[i].y].tetraIdx;
+                Vector3 pos2 = b2.x * particles[idx2.x] +
+                            b2.y * particles[idx2.y] +
+                            b2.z * particles[idx2.z] +
+                            b2.w * particles[idx2.w];
+
+                Gizmos.DrawLine(pos1, pos2);
+            }
         }
     }
 #endregion

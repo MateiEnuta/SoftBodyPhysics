@@ -890,26 +890,31 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 96b0b115f71144c4bad7bc252b2fb8c5, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PbdPointTriangleGizmoStepper
+  collisionMode: 1
   pointT: {fileID: 0}
   aT: {fileID: 0}
   bT: {fileID: 0}
   cT: {fileID: 0}
+  dT: {fileID: 0}
   pointPos: {x: 0, y: 1, z: 0}
-  aPos: {x: 0.5, y: 0, z: -0.5}
+  aPos: {x: 0.44, y: 0, z: -0.5}
   bPos: {x: -0.5, y: 0, z: -0.5}
-  cPos: {x: 0, y: 0, z: 0.5}
+  cPos: {x: -0.18, y: 0.21, z: -0.93}
+  dPos: {x: 1, y: 0.73, z: 0.5}
   pointVel: {x: 0, y: -3, z: 0}
   aVel: {x: 0, y: 0, z: 0}
   bVel: {x: 0, y: 0, z: 0}
-  cVel: {x: 0, y: 0, z: 0}
+  cVel: {x: 0, y: -0.5, z: 0}
+  dVel: {x: 0, y: -0.5, z: 0}
   pointInvMass: 1
   aInvMass: 0.5
   bInvMass: 0.5
   cInvMass: 0.5
+  dInvMass: 1
   dt: 0.016666668
   skin: 0.001
   solverIterations: 1
-  simulatedCompliance: 0.001
+  simulatedCompliance: 0
   autoStepInPlayMode: 1
 --- !u!4 &317832265
 Transform:
