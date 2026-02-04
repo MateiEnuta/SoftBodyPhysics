@@ -397,36 +397,20 @@ public struct PointTriCollision : IJob
                 if (edge1Idx.x == edge2Idx.x || edge1Idx.x == edge2Idx.y ||
                     edge1Idx.y == edge2Idx.x || edge1Idx.y == edge2Idx.y) continue;
 
-                // SolveDynamicEdgeCollision(
-                //     previous1E1,
-                //     ref current1E1,
-                //     previous2E1,
-                //     ref current2E1,
-                //     cv1E1,
-                //     cv2E1,
-                //     cv1E2,
-                //     cv2E2,
-                //     collisionEdges[e1].zw,
-                //     collisionEdges[e2].zw
-                // );
+                SolveDynamicEdgeCollision(
+                    previous1E1,
+                    ref current1E1,
+                    previous2E1,
+                    ref current2E1,
+                    cv1E1,
+                    cv2E1,
+                    cv1E2,
+                    cv2E2,
+                    collisionEdges[e1].zw,
+                    collisionEdges[e2].zw
+                );
             }
         }
-
-        // for (int t1Index = 0; t1Index < collisionTriangles.Length - 1; t1Index++)
-        // {
-        //     int3 t1 = collisionTriangles[t1Index];
-        //     for (int t2Index = t1Index + 1; t2Index < collisionTriangles.Length; t2Index++)
-        //     {
-        //         int3 t2 = collisionTriangles[t2Index];
-        //         if (
-        //             t1.x == t2.x || t1.x == t2.y || t1.x == t2.z ||
-        //             t1.y == t2.x || t1.y == t2.y || t1.y == t2.z ||
-        //             t1.z == t2.x || t1.z == t2.y || t1.z == t2.z
-        //         ) continue;
-
-        //         SolveTTCollision(t1, t2);
-        //     }
-        // }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -465,7 +449,11 @@ public struct PointTriCollision : IJob
         float3 v2_prev = GetPositionsThroughBary(cv2E2, true);
         float3 v2_curr = GetPositionsThroughBary(cv2E2, false);
 
-        LineLineSeparation(u1_curr, u2_curr, v1_curr, v2_curr,
+        if (!EdgeSpeculativeCheck(u1_curr, u2_curr, u1_prev, u2_prev, v1_curr, v2_curr, v1_prev, v2_prev)) return;
+
+
+        LineLineSeparation(
+            u1_curr, u2_curr, v1_curr, v2_curr, 
             out float t1, out float t2
         );
 
@@ -475,20 +463,13 @@ public struct PointTriCollision : IJob
         float3 pOnU = u1_curr + t1 * u;
         float3 pOnV = v1_curr + t2 * v;
 
-        float3 velOnU = (1f - t1) * (u1_curr - u1_prev) + t1 * (u2_curr - u2_prev);
-        float3 velOnV = (1f - t2) * (v1_curr - v1_prev) + t2 * (v2_curr - v2_prev);
-        float3 relInvVelToU = velOnU - velOnV;
+        float3 velOnU = t1 * (u1_curr - u1_prev) + (1f - t1) * (u2_curr - u2_prev);
+        float3 velOnV = t2 * (v1_curr - v1_prev) + (1f - t2) * (v2_curr - v2_prev);
 
-        float3 separation = pOnV - pOnU;
-        float sepLength = math.length(separation);
-        if (sepLength > 0.01f)
-        {
-            float3 sepDir = separation / sepLength;
-            if (sepLength - math.dot(relInvVelToU, sepDir) > 0.01f) return;
-        }
-
-        if (sepLength <= 1e-08f) return;
-        float3 corrDir = separation / sepLength;
+        float3 corr = pOnV - pOnU;
+        float corrLength = math.length(corr);
+        if (corrLength <= 1e-08f) return;
+        float3 corrDir = corr / corrLength;
 
         // Difference between the 2 previous positions
         float3 difPrevUV = (pOnV - velOnV) - (pOnU - velOnU);
@@ -499,17 +480,17 @@ public struct PointTriCollision : IJob
         float relVelToPrevUV = math.dot(relVel, dirPrevUV);
 
         float totalDistance = lengthPrevUV - relVelToPrevUV;
-        if (totalDistance >= -0.01f) return;
+        if (totalDistance > -0.01f) return;
 
 
 
         // Apply correction step
-        float C = sepLength + 0.01f;
+        float C = corrLength - 0.01f;
 
-        float3 u1Grad =  (1f - t1) * corrDir;
-        float3 u2Grad =  t1        * corrDir;
-        float3 v1Grad = -(1f - t2) * corrDir;
-        float3 v2Grad = -t2        * corrDir;
+        float3 u1Grad =  t1        * corrDir;
+        float3 u2Grad =  (1f - t1) * corrDir;
+        float3 v1Grad = -t2        * corrDir;
+        float3 v2Grad = -(1f - t2) * corrDir;
 
         float u1InvMass = ColParticleInvMass(cv1E1);
         float u2InvMass = ColParticleInvMass(cv2E1);
@@ -517,10 +498,10 @@ public struct PointTriCollision : IJob
         float v2InvMass = ColParticleInvMass(cv2E2);
 
         float sumWeightedGradients = 0;
-        sumWeightedGradients += u1InvMass * ((1f - t1) * (1f - t1));
-        sumWeightedGradients += u2InvMass * (t1 * t1);
-        sumWeightedGradients += v1InvMass * ((1f - t2) * (1f - t2));
-        sumWeightedGradients += v2InvMass * (t2 * t2);
+        sumWeightedGradients += u1InvMass * (t1 * t1);
+        sumWeightedGradients += u2InvMass * ((1f - t1) * (1f - t1));
+        sumWeightedGradients += v1InvMass * (t2 * t2);
+        sumWeightedGradients += v2InvMass * ((1f - t2) * (1f - t2));
         if (sumWeightedGradients < 1e-08f) return;
 
         float deltaLambda = C / sumWeightedGradients;
@@ -534,292 +515,32 @@ public struct PointTriCollision : IJob
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void SolveTTCollision(int3 t1, int3 t2)
-    {
-        // First triangle vertices positions and previous positions
-        float3 t1p1_prev = GetPositionsThroughBary(collisionVertices[t1.x], true);
-        float3 t1p2_prev = GetPositionsThroughBary(collisionVertices[t1.y], true);
-        float3 t1p3_prev = GetPositionsThroughBary(collisionVertices[t1.z], true);
-        float3 t1p1_curr = GetPositionsThroughBary(collisionVertices[t1.x], false);
-        float3 t1p2_curr = GetPositionsThroughBary(collisionVertices[t1.y], false);
-        float3 t1p3_curr = GetPositionsThroughBary(collisionVertices[t1.z], false);
-
-        // Second triangle vertices positions and previous positions
-        float3 t2p1_prev = GetPositionsThroughBary(collisionVertices[t2.x], true);
-        float3 t2p2_prev = GetPositionsThroughBary(collisionVertices[t2.y], true);
-        float3 t2p3_prev = GetPositionsThroughBary(collisionVertices[t2.z], true);
-        float3 t2p1_curr = GetPositionsThroughBary(collisionVertices[t2.x], false);
-        float3 t2p2_curr = GetPositionsThroughBary(collisionVertices[t2.y], false);
-        float3 t2p3_curr = GetPositionsThroughBary(collisionVertices[t2.z], false);
-
-        float3 n1 = math.normalize(math.cross(t1p2_curr - t1p1_curr, t1p3_curr - t1p1_curr));
-        float3 n2 = math.normalize(math.cross(t2p2_curr - t2p1_curr, t2p3_curr - t2p1_curr));
-
-        if (math.dot(n1, n2) < -0.01f) return;
-
-        // Data used for calculating speculative and collision repsonse
-        // Every current point closest point on the other triangle + it's barycentric
-        // First triangle vertices to the second triangle
-        float3 t1p1_oppTriHitP = ClosestPointOnTriangleBarycentric(
-            t1p1_curr, t2p1_curr, t2p2_curr, t2p3_curr, out float3 t1p1_oppTriBary
-        );
-        float3 t1p2_oppTriHitP = ClosestPointOnTriangleBarycentric(
-            t1p2_curr, t2p1_curr, t2p2_curr, t2p3_curr, out float3 t1p2_oppTriBary
-        );
-        float3 t1p3_oppTriHitP = ClosestPointOnTriangleBarycentric(
-            t1p3_curr, t2p1_curr, t2p2_curr, t2p3_curr, out float3 t1p3_oppTriBary
-        );
-
-        // Second triangle vertices to the first triangle
-        float3 t2p1_oppTriHitP = ClosestPointOnTriangleBarycentric(
-            t2p1_curr, t1p1_curr, t1p2_curr, t1p3_curr, out float3 t2p1_oppTriBary
-        );
-        float3 t2p2_oppTriHitP = ClosestPointOnTriangleBarycentric(
-            t2p2_curr, t1p1_curr, t1p2_curr, t1p3_curr, out float3 t2p2_oppTriBary
-        );
-        float3 t2p3_oppTriHitP = ClosestPointOnTriangleBarycentric(
-            t2p3_curr, t1p1_curr, t1p2_curr, t1p3_curr, out float3 t2p3_oppTriBary
-        );
-
-        // Return if speculative fails
-        if (!TTSpeculativeCheck(
-            t1p1_prev, t1p2_prev, t1p3_prev,
-            t1p1_curr, t1p2_curr, t1p3_curr,
-            t2p1_prev, t2p2_prev, t2p3_prev,
-            t2p1_curr, t2p2_curr, t2p3_curr,
-            t1p1_oppTriHitP, t1p2_oppTriHitP, t1p3_oppTriHitP,
-            t1p1_oppTriBary, t1p2_oppTriBary, t1p3_oppTriBary,
-            t2p1_oppTriHitP, t2p2_oppTriHitP, t2p3_oppTriHitP,
-            t2p1_oppTriBary, t2p2_oppTriBary, t2p3_oppTriBary
-        )) return;
-
-        ApplyPTCorrection(
-            t1.x, t2, t1p1_curr, t1p1_oppTriBary,
-            n2, t2p1_curr
-        );
-        ApplyPTCorrection(
-            t1.y, t2, t1p2_curr, t1p2_oppTriBary,
-            n2, t2p1_curr
-        );
-        ApplyPTCorrection(
-            t1.z, t2, t1p3_curr, t1p3_oppTriBary,
-            n2, t2p1_curr
-        );
-
-        ApplyPTCorrection(
-            t2.x, t1, t2p1_curr, t2p1_oppTriBary,
-            n1, t1p1_curr
-        );
-        ApplyPTCorrection(
-            t2.y, t1, t2p2_curr, t2p2_oppTriBary,
-            n1, t1p1_curr
-        );
-        ApplyPTCorrection(
-            t2.z, t1, t2p3_curr, t2p3_oppTriBary,
-            n1, t1p1_curr
-        );
-    }
-
-    private void ApplyPTCorrection(
-        int pIdx, int3 tIdx,
-        float3 p_curr, float3 p_TriBary,
-        float3 tN, float3 t1_curr
-    )
-    {
-        float C = math.dot(p_curr - t1_curr, tN) - 0.001f;
-        if (C >= 0) return;
-
-        // Calcualte gradients
-        float3 pGrad = tN;
-        float3 AGrad = -p_TriBary.x * tN;
-        float3 BGrad = -p_TriBary.y * tN;
-        float3 CGrad = -p_TriBary.z * tN;
-
-        // Store inverse mass
-        float invMassP = ColParticleInvMass(collisionVertices[pIdx]);
-        float invMass0 = ColParticleInvMass(collisionVertices[tIdx.x]);
-        float invMass1 = ColParticleInvMass(collisionVertices[tIdx.y]);
-        float invMass2 = ColParticleInvMass(collisionVertices[tIdx.z]);
-        
-        float sumWeightedGradients = 0;
-        sumWeightedGradients += invMassP;
-        sumWeightedGradients += invMass0 * (p_TriBary.x * p_TriBary.x);
-        sumWeightedGradients += invMass1 * (p_TriBary.y * p_TriBary.y);
-        sumWeightedGradients += invMass2 * (p_TriBary.z * p_TriBary.z);
-        if (sumWeightedGradients < 1e-08f) return;
-
-        // Calcualte dLambda
-        float deltaLambda = -C / sumWeightedGradients;
-
-        // Apply current particle correction
-        UpdateParticlePos(collisionVertices[pIdx], invMassP * deltaLambda * pGrad);
-        // Apply correciton to triangle vertices
-        UpdateParticlePos(collisionVertices[tIdx.x], invMass0 * deltaLambda * AGrad);
-        UpdateParticlePos(collisionVertices[tIdx.y], invMass1 * deltaLambda * BGrad);
-        UpdateParticlePos(collisionVertices[tIdx.z], invMass2 * deltaLambda * CGrad);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool TTSpeculativeCheck(
-        float3 t1p1_prev, float3 t1p2_prev, float3 t1p3_prev,
-        float3 t1p1_curr, float3 t1p2_curr, float3 t1p3_curr,
-        float3 t2p1_prev, float3 t2p2_prev, float3 t2p3_prev,
-        float3 t2p1_curr, float3 t2p2_curr, float3 t2p3_curr,
-        float3 t1p1_oppTriHitP, float3 t1p2_oppTriHitP, float3 t1p3_oppTriHitP,
-        float3 t1p1_oppTriBary, float3 t1p2_oppTriBary, float3 t1p3_oppTriBary,
-        float3 t2p1_oppTriHitP, float3 t2p2_oppTriHitP, float3 t2p3_oppTriHitP,
-        float3 t2p1_oppTriBary, float3 t2p2_oppTriBary, float3 t2p3_oppTriBary
-    )
-    {
-        // Check t1 vertices against t2
-        if (PTSpeculativeCheck(
-            t1p1_prev, t1p1_curr, t1p1_oppTriHitP, t1p1_oppTriBary,
-            t2p1_prev, t2p2_prev, t2p3_prev,
-            t2p1_curr, t2p2_curr, t2p3_curr
-        )) return true;
-        if (PTSpeculativeCheck(
-            t1p2_prev, t1p2_curr, t1p2_oppTriHitP, t1p2_oppTriBary,
-            t2p1_prev, t2p2_prev, t2p3_prev,
-            t2p1_curr, t2p2_curr, t2p3_curr
-        )) return true;
-        if (PTSpeculativeCheck(
-            t1p3_prev, t1p3_curr, t1p3_oppTriHitP, t1p3_oppTriBary,
-            t2p1_prev, t2p2_prev, t2p3_prev,
-            t2p1_curr, t2p2_curr, t2p3_curr
-        )) return true;
-
-        // Check t2 vertices against t1
-        if (PTSpeculativeCheck(
-            t2p1_prev, t2p1_curr, t2p1_oppTriHitP, t2p1_oppTriBary,
-            t1p1_prev, t1p2_prev, t1p3_prev,
-            t1p1_curr, t1p2_curr, t1p3_curr
-        )) return true;
-        if (PTSpeculativeCheck(
-            t2p2_prev, t2p2_curr, t2p2_oppTriHitP, t2p2_oppTriBary,
-            t1p1_prev, t1p2_prev, t1p3_prev,
-            t1p1_curr, t1p2_curr, t1p3_curr
-        )) return true;
-        if (PTSpeculativeCheck(
-            t2p3_prev, t2p3_curr, t2p3_oppTriHitP, t2p3_oppTriBary,
-            t1p1_prev, t1p2_prev, t1p3_prev,
-            t1p1_curr, t1p2_curr, t1p3_curr
-        )) return true;
-
-        // Check every edge against every other triangl edge
-        // Check every edge of t1 against first edge of t2
-        if (EESpeculativeCheck(
-            t1p1_prev, t1p2_prev,
-            t1p1_curr, t1p2_curr,
-            t2p1_prev, t2p2_prev,
-            t2p1_curr, t2p2_curr
-        )) return true;
-        if (EESpeculativeCheck(
-            t1p2_prev, t1p3_prev,
-            t1p2_curr, t1p3_curr,
-            t2p1_prev, t2p2_prev,
-            t2p1_curr, t2p2_curr
-        )) return true;
-        if (EESpeculativeCheck(
-            t1p3_prev, t1p1_prev,
-            t1p3_curr, t1p1_curr,
-            t2p1_prev, t2p2_prev,
-            t2p1_curr, t2p2_curr
-        )) return true;
-
-        // Check every edge of t1 against the second edge of t2
-        if (EESpeculativeCheck(
-            t1p1_prev, t1p2_prev,
-            t1p1_curr, t1p2_curr,
-            t2p2_prev, t2p3_prev,
-            t2p2_curr, t2p3_curr
-        )) return true;
-        if (EESpeculativeCheck(
-            t1p2_prev, t1p3_prev,
-            t1p2_curr, t1p3_curr,
-            t2p2_prev, t2p3_prev,
-            t2p2_curr, t2p3_curr
-        )) return true;
-        if (EESpeculativeCheck(
-            t1p3_prev, t1p1_prev,
-            t1p3_curr, t1p1_curr,
-            t2p2_prev, t2p3_prev,
-            t2p2_curr, t2p3_curr
-        )) return true;
-
-        // Check every edge of t1 against the third edge of t2
-        if (EESpeculativeCheck(
-            t1p1_prev, t1p2_prev,
-            t1p1_curr, t1p2_curr,
-            t2p3_prev, t2p1_prev,
-            t2p3_curr, t2p1_curr
-        )) return true;
-        if (EESpeculativeCheck(
-            t1p2_prev, t1p3_prev,
-            t1p2_curr, t1p3_curr,
-            t2p3_prev, t2p1_prev,
-            t2p3_curr, t2p1_curr
-        )) return true;
-        if (EESpeculativeCheck(
-            t1p3_prev, t1p1_prev,
-            t1p3_curr, t1p1_curr,
-            t2p3_prev, t2p1_prev,
-            t2p3_curr, t2p1_curr
-        )) return true;
-
-        // Return false if every check fails
-        return false;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool PTSpeculativeCheck(
-        float3 p_prev, float3 p_curr,
-        float3 p_oppTriHitP, float3 p_oppTriBary,
-        float3 t1_prev, float3 t2_prev, float3 t3_prev,
-        float3 t1_curr, float3 t2_curr, float3 t3_curr
-    )
-    {
-        float3 pVel = p_curr - p_prev;
-        float3 tVel = p_oppTriBary.x * (t1_curr - t1_prev) +
-                      p_oppTriBary.y * (t2_curr - t2_prev) +
-                      p_oppTriBary.z * (t3_curr - t3_prev);
-
-        float3 relInvVel = pVel - tVel;
-
-        float3 corrToHitP = p_oppTriHitP - p_curr;
-        float lengthToHitP = math.length(corrToHitP);
-        if (lengthToHitP < 0.01f) return true;
-        float3 dirToHitP = corrToHitP / lengthToHitP;
-
-        return (lengthToHitP - math.dot(relInvVel, dirToHitP)) <= 0.01f;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool EESpeculativeCheck(
-        float3 u1_prev, float3 u2_prev,
+    private bool EdgeSpeculativeCheck(
         float3 u1_curr, float3 u2_curr,
-        float3 v1_prev, float3 v2_prev,
-        float3 v1_curr, float3 v2_curr)
+        float3 u1_prev, float3 u2_prev,
+        float3 v1_curr, float3 v2_curr,
+        float3 v1_prev, float3 v2_prev)
     {
-        LineLineSeparation(u1_curr, u2_curr, v1_curr, v2_curr,
+        LineLineSeparation(u1_prev, u2_prev, v1_prev, v2_prev,
             out float t1, out float t2
         );
 
-        float3 u = u2_curr - u1_curr;
-        float3 v = v2_curr - v1_curr;
+        float3 u = u2_prev - u1_prev;
+        float3 v = v2_prev - v1_prev;
 
-        float3 pOnU = u1_curr + t1 * u;
-        float3 pOnV = v1_curr + t2 * v;
+        float3 pOnU = u1_prev + t1 * u;
+        float3 pOnV = v1_prev + t2 * v;
 
-        float3 velOnU = (1f - t1) * (u1_curr - u1_prev) + t1 * (u2_curr - u2_prev);
-        float3 velOnV = (1f - t2) * (v1_curr - v1_prev) + t2 * (v2_curr - v2_prev);
-        float3 relInvVelToU = velOnU - velOnV;
+        float3 velOnU = t1 * (u1_curr - u1_prev) + (1f - t1) * (u2_curr - u2_prev);
+        float3 velOnV = t2 * (v1_curr - v1_prev) + (1f - t2) * (v2_curr - v2_prev);
+        float3 relVelToU = velOnV - velOnU;
 
         float3 separation = pOnV - pOnU;
         float sepLength = math.length(separation);
         if (sepLength <= 0.01f) return true;
         float3 sepDir = separation / sepLength;
 
-        float totalDistance = sepLength - math.dot(relInvVelToU, sepDir);
+        float totalDistance = sepLength - math.dot(relVelToU, sepDir);
         return totalDistance <= 0.01f;
     }
 
