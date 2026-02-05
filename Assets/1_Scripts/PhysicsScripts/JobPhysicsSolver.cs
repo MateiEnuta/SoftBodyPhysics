@@ -392,164 +392,183 @@ public struct PointTriCollision : IJob
             for (int e2 = e1 + 1; e2 < collisionEdges.Length; e2++)
             {
                 int2 edge2Idx = collisionEdges[e2].xy;
-                CollisionVertex cv1E2 = collisionVertices[edge2Idx.x];
-                CollisionVertex cv2E2 = collisionVertices[edge2Idx.y];
                 if (edge1Idx.x == edge2Idx.x || edge1Idx.x == edge2Idx.y ||
                     edge1Idx.y == edge2Idx.x || edge1Idx.y == edge2Idx.y) continue;
 
-                SolveDynamicEdgeCollision(
-                    previous1E1,
-                    ref current1E1,
-                    previous2E1,
-                    ref current2E1,
-                    cv1E1,
-                    cv2E1,
-                    cv1E2,
-                    cv2E2,
-                    collisionEdges[e1].zw,
-                    collisionEdges[e2].zw
+                EECollision(
+                    e1, e2, 
+                    ref previous1E1, ref current1E1,
+                    ref previous2E1, ref current2E1
                 );
             }
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private float3 GetPositionsThroughBary(CollisionVertex cv, bool isPrevious)
-    {
-        float4 bary = cv.baryCoords;
-        int4 tetIdx = cv.tetraIdx;
-
-        if (isPrevious) return bary.x * particles[tetIdx.x].previousPosition +
-                               bary.y * particles[tetIdx.y].previousPosition +
-                               bary.z * particles[tetIdx.z].previousPosition +
-                               bary.w * particles[tetIdx.w].previousPosition;
-
-        return bary.x * particles[tetIdx.x].position +
-               bary.y * particles[tetIdx.y].position +
-               bary.z * particles[tetIdx.z].position +
-               bary.w * particles[tetIdx.w].position;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void SolveDynamicEdgeCollision(
-        float3 u1_prev,
-        ref float3 u1_curr,
-        float3 u2_prev,
-        ref float3 u2_curr,
-        CollisionVertex cv1E1,
-        CollisionVertex cv2E1,
-        CollisionVertex cv1E2,
-        CollisionVertex cv2E2,
-        int2 collidingEdgeTri,
-        int2 edgeTri
+    private void EECollision(
+        int uIdx, int vIdx,
+        ref float3 u1_prev, ref float3 u1_curr,
+        ref float3 u2_prev, ref float3 u2_curr
     )
     {
-        float3 v1_prev = GetPositionsThroughBary(cv1E2, true);
-        float3 v1_curr = GetPositionsThroughBary(cv1E2, false);
-        float3 v2_prev = GetPositionsThroughBary(cv2E2, true);
-        float3 v2_curr = GetPositionsThroughBary(cv2E2, false);
+        CollisionVertex v1_cv = collisionVertices[collisionEdges[vIdx].x];
+        CollisionVertex v2_cv = collisionVertices[collisionEdges[vIdx].y];
 
-        if (!EdgeSpeculativeCheck(u1_curr, u2_curr, u1_prev, u2_prev, v1_curr, v2_curr, v1_prev, v2_prev)) return;
+        float3 v1_prev = GetPositionsThroughBary(v1_cv, true);
+        float3 v1_curr = GetPositionsThroughBary(v1_cv, false);
+        float3 v2_prev = GetPositionsThroughBary(v2_cv, true);
+        float3 v2_curr = GetPositionsThroughBary(v2_cv, false);
 
-
-        LineLineSeparation(
-            u1_curr, u2_curr, v1_curr, v2_curr, 
+        // Find closest points to each line at the current positoons
+        LineLineSeparation(u1_curr, u2_curr, v1_curr, v2_curr,
             out float t1, out float t2
         );
 
+        // speculative check
         float3 u = u2_curr - u1_curr;
         float3 v = v2_curr - v1_curr;
 
         float3 pOnU = u1_curr + t1 * u;
         float3 pOnV = v1_curr + t2 * v;
 
-        float3 velOnU = t1 * (u1_curr - u1_prev) + (1f - t1) * (u2_curr - u2_prev);
-        float3 velOnV = t2 * (v1_curr - v1_prev) + (1f - t2) * (v2_curr - v2_prev);
-
-        float3 corr = pOnV - pOnU;
-        float corrLength = math.length(corr);
-        if (corrLength <= 1e-08f) return;
-        float3 corrDir = corr / corrLength;
-
-        // Difference between the 2 previous positions
-        float3 difPrevUV = (pOnV - velOnV) - (pOnU - velOnU);
-        float lengthPrevUV = math.length(difPrevUV);
-        float3 dirPrevUV = difPrevUV / lengthPrevUV;
-
-        float3 relVel = velOnV - velOnU;
-        float relVelToPrevUV = math.dot(relVel, dirPrevUV);
-
-        float totalDistance = lengthPrevUV - relVelToPrevUV;
-        if (totalDistance > -0.01f) return;
-
-
-
-        // Apply correction step
-        float C = corrLength - 0.01f;
-
-        float3 u1Grad =  t1        * corrDir;
-        float3 u2Grad =  (1f - t1) * corrDir;
-        float3 v1Grad = -t2        * corrDir;
-        float3 v2Grad = -(1f - t2) * corrDir;
-
-        float u1InvMass = ColParticleInvMass(cv1E1);
-        float u2InvMass = ColParticleInvMass(cv2E1);
-        float v1InvMass = ColParticleInvMass(cv1E2);
-        float v2InvMass = ColParticleInvMass(cv2E2);
-
-        float sumWeightedGradients = 0;
-        sumWeightedGradients += u1InvMass * (t1 * t1);
-        sumWeightedGradients += u2InvMass * ((1f - t1) * (1f - t1));
-        sumWeightedGradients += v1InvMass * (t2 * t2);
-        sumWeightedGradients += v2InvMass * ((1f - t2) * (1f - t2));
-        if (sumWeightedGradients < 1e-08f) return;
-
-        float deltaLambda = C / sumWeightedGradients;
-
-        UpdateParticlePos(cv1E1, u1InvMass * deltaLambda * u1Grad);
-        u1_curr +=               u1InvMass * deltaLambda * u1Grad;
-        UpdateParticlePos(cv2E1, u2InvMass * deltaLambda * u2Grad);
-        u2_curr +=               u2InvMass * deltaLambda * u2Grad;
-        UpdateParticlePos(cv1E2, v1InvMass * deltaLambda * v1Grad);
-        UpdateParticlePos(cv2E2, v2InvMass * deltaLambda * v2Grad);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private bool EdgeSpeculativeCheck(
-        float3 u1_curr, float3 u2_curr,
-        float3 u1_prev, float3 u2_prev,
-        float3 v1_curr, float3 v2_curr,
-        float3 v1_prev, float3 v2_prev)
-    {
-        LineLineSeparation(u1_prev, u2_prev, v1_prev, v2_prev,
-            out float t1, out float t2
-        );
-
-        float3 u = u2_prev - u1_prev;
-        float3 v = v2_prev - v1_prev;
-
-        float3 pOnU = u1_prev + t1 * u;
-        float3 pOnV = v1_prev + t2 * v;
-
-        float3 velOnU = t1 * (u1_curr - u1_prev) + (1f - t1) * (u2_curr - u2_prev);
-        float3 velOnV = t2 * (v1_curr - v1_prev) + (1f - t2) * (v2_curr - v2_prev);
-        float3 relVelToU = velOnV - velOnU;
+        float3 velOnU = (1f - t1) * (u1_curr - u1_prev) + t1 * (u2_curr - u2_prev);
+        float3 velOnV = (1f - t2) * (v1_curr - v1_prev) + t2 * (v2_curr - v2_prev);
+        float3 relInvVelToU = velOnV - velOnU;
 
         float3 separation = pOnV - pOnU;
         float sepLength = math.length(separation);
-        if (sepLength <= 0.01f) return true;
+        if (sepLength <= 1e-06f) return;
         float3 sepDir = separation / sepLength;
 
-        float totalDistance = sepLength - math.dot(relVelToU, sepDir);
-        return totalDistance <= 0.01f;
+        float totalDistance = sepLength - math.dot(relInvVelToU, sepDir);
+        if (totalDistance > 0.01f) return;
+
+        // CCD check
+        if (!EdgeEdgeCCD_Boolean(
+            u1_prev, u2_prev, v1_prev, v2_prev,
+            u1_curr, u2_curr, v1_curr, v2_curr
+        )) return;
+
+        // Collision response
+        CollisionVertex u1_cv = collisionVertices[collisionEdges[uIdx].x];
+        CollisionVertex u2_cv = collisionVertices[collisionEdges[uIdx].y];
+        float C = -sepLength - 0.01f;
+
+        float3 u1_grad = sepDir * (1f - t1);
+        float3 u2_grad = sepDir * t1;
+        float3 v1_grad = -sepDir * (1f - t2);
+        float3 v2_grad = -sepDir * t2;
+
+        float u1_invMass = ColParticleInvMass(u1_cv);
+        float u2_invMass = ColParticleInvMass(u2_cv);
+        float v1_invMass = ColParticleInvMass(v1_cv);
+        float v2_invMass = ColParticleInvMass(v2_cv);
+
+        float sumWeightedGradients = 0;
+        sumWeightedGradients += u1_invMass * (1f - t1) * (1f - t1);
+        sumWeightedGradients += u2_invMass * t1 * t1;
+        sumWeightedGradients += v1_invMass * (1f - t2) * (1f - t2);
+        sumWeightedGradients += v2_invMass * t2 * t2;
+        if (sumWeightedGradients < 1e-08f) return;
+
+        float deltaLambda = -C / sumWeightedGradients;
+
+        UpdateParticlePos(u1_cv, u1_invMass * deltaLambda * u1_grad);
+        u1_curr += u1_invMass * deltaLambda * u1_grad;
+        UpdateParticlePos(u2_cv, u2_invMass * deltaLambda * u2_grad);
+        u2_curr += u2_invMass * deltaLambda * u2_grad;
+
+        UpdateParticlePos(v1_cv, v1_invMass * deltaLambda * v1_grad);
+        UpdateParticlePos(v2_cv, v2_invMass * deltaLambda * v2_grad);
+    }
+
+    double3 D(float3 v) => new double3(v.x, v.y, v.z);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool EdgeEdgeCCD_Boolean(
+        float3 a0_0, float3 a1_0, float3 b0_0, float3 b1_0,
+        float3 a0_1, float3 a1_1, float3 b0_1, float3 b1_1,
+        float epsPos = 1e-5f,
+        float epsParallel = 1e-12f)
+    {
+        // Convert once
+        double3 A0_0 = D(a0_0), A1_0 = D(a1_0), B0_0 = D(b0_0), B1_0 = D(b1_0);
+        double3 A0_1 = D(a0_1), A1_1 = D(a1_1), B0_1 = D(b0_1), B1_1 = D(b1_1);
+
+        // Build cubic coefficients for s(t) = r(t) · (da(t) × db(t)) = 0
+        double3 r0 = B0_0 - A0_0;
+        double3 r1 = (B0_1 - B0_0) - (A0_1 - A0_0);
+
+        double3 da0 = A1_0 - A0_0;
+        double3 da1 = (A1_1 - A1_0) - (A0_1 - A0_0);
+
+        double3 db0 = B1_0 - B0_0;
+        double3 db1 = (B1_1 - B1_0) - (B0_1 - B0_0);
+
+        double3 n0 = math.cross(da0, db0);
+        double3 n1 = math.cross(da0, db1) + math.cross(da1, db0);
+        double3 n2 = math.cross(da1, db1);
+
+        double c0 = math.dot(r0, n0);
+        double c1 = math.dot(r0, n1) + math.dot(r1, n0);
+        double c2 = math.dot(r0, n2) + math.dot(r1, n1);
+        double c3 = math.dot(r1, n2);
+
+        // If it's identically ~0, that's the coplanar/degenerate case you said you can ignore.
+        if (math.abs(c0) + math.abs(c1) + math.abs(c2) + math.abs(c3) < 1e-18)
+            return false;
+
+        // Solve cubic in [0,1] with fixed-size outputs
+        double3 roots;
+        int3 valid;
+        int n = CCDMath.SolveCubic01(c0, c1, c2, c3, out roots, out valid);
+
+        if (n == 0) return false;
+
+        double epsPos2 = (double)epsPos * (double)epsPos;
+        double epsPar = (double)epsParallel;
+
+        // Fixed-size loop (unrolled via valid mask)
+        // root 0
+        if (valid.x != 0 && IntersectAtT(roots.x)) return true;
+        if (valid.y != 0 && IntersectAtT(roots.y)) return true;
+        if (valid.z != 0 && IntersectAtT(roots.z)) return true;
+
+        return false;
+
+        bool IntersectAtT(double t)
+        {
+            // Lerp endpoints at time t
+            double3 a0 = math.lerp(A0_0, A0_1, t);
+            double3 a1 = math.lerp(A1_0, A1_1, t);
+            double3 b0 = math.lerp(B0_0, B0_1, t);
+            double3 b1 = math.lerp(B1_0, B1_1, t);
+
+            double3 da = a1 - a0;
+            double3 db = b1 - b0;
+            double3 r  = b0 - a0;
+
+            double3 nrm = math.cross(da, db);
+            double denom = math.dot(nrm, nrm);
+
+            // Skip near-parallel/coplanar-degenerate validation
+            if (denom < epsPar) return false;
+
+            // Line-line intersection parameters in coplanar case
+            double u = math.dot(math.cross(r, db), nrm) / denom;
+            double v = math.dot(math.cross(r, da), nrm) / denom;
+
+            if (u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0) return false;
+
+            double3 p = a0 + u * da;
+            double3 q = b0 + v * db;
+
+            double3 d = p - q;
+            return math.dot(d, d) <= epsPos2;
+        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void SolveDynamicCollision(
-        int pointIdx,
-        float3 previousP,
-        ref float3 currentP,
-        int triIdx)
+        int pointIdx, float3 previousP, ref float3 currentP, int triIdx)
     {
         int3 tri = collisionTriangles[triIdx];
 
@@ -589,10 +608,9 @@ public struct PointTriCollision : IJob
 
         // Collsion response
         float3 triNormal = math.normalize(math.cross(cB - cA, cC - cA));
-        ClosestPointOnTriangleBarycentric(currentP, cA, cB, cC, out float3 cTriBary, true);
-
         float Con = math.dot(currentP - cA, triNormal) - 0.001f;
         if (Con >= 0f) return;
+        ClosestPointOnTriangleBarycentric(currentP, cA, cB, cC, out float3 cTriBary, true);
 
         // Calcualte gradients
         float3 pGrad = triNormal;
@@ -627,28 +645,6 @@ public struct PointTriCollision : IJob
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private float ColParticleInvMass(CollisionVertex cv)
-    {
-        // Indices of the tetra particles
-        int i0 = cv.tetraIdx.x;
-        int i1 = cv.tetraIdx.y;
-        int i2 = cv.tetraIdx.z;
-        int i3 = cv.tetraIdx.w;
-
-        float4 b = cv.baryCoords;
-
-        // Calculate mass
-        float mass = 0;
-        mass += 1f / particles[i0].invMass * b.x;
-        mass += 1f / particles[i1].invMass * b.y;
-        mass += 1f / particles[i2].invMass * b.z;
-        mass += 1f / particles[i3].invMass * b.w;
-
-        // Inverse the total mass
-        return 1f / mass;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void SolveStaticCollision(int p, float3 previousPosition, ref float3 currentPosition, int triangleIdx)
     {
         // Store static triangle vertices postions
@@ -656,28 +652,49 @@ public struct PointTriCollision : IJob
         float3 cT2 = staticColPoints[staticColTriangles[triangleIdx].y];
         float3 cT3 = staticColPoints[staticColTriangles[triangleIdx].z];
 
-        // Find the closest point on tri to particle vel
-        float3 pVelocityOffser = currentPosition - previousPosition;
-        float3 hitPoint = ClosestPointOnTriangleBarycentric(previousPosition, cT1, cT2, cT3, out float3 triBary);
-
-        // Paritcle to hit point data
-        float3 hitOffset = hitPoint - previousPosition;
-        float hitDis = math.length(hitOffset);
-        float3 hitDir = hitOffset / hitDis;
-
-        float totalDistance = hitDis - math.dot(hitDir, pVelocityOffser);
-
-        // Discard the collision if speculative fails
-        if (totalDistance > 0.01f) return;
-
-
+        // Check if the collsion even exists
         float3 triNormal = math.normalize(math.cross(cT2 - cT1, cT3 - cT1));
         float penetration = math.dot(currentPosition - cT1, triNormal) - 0.001f;
         if (penetration >= 0f) return;
 
-        CollisionVertex cv = collisionVertices[p];
-        UpdateParticlePos(cv, -penetration * triNormal);
+        // Find the closest point on tri to particle vel
+        float3 pVelocityOffser = currentPosition - previousPosition;
+        float3 hitPoint = ClosestPointOnTriangleBarycentric(currentPosition, cT1, cT2, cT3, out float3 triBary);
+
+        // Paritcle to hit point data
+        float3 hitOffset = hitPoint - currentPosition;
+        float hitDis = math.length(hitOffset);
+        if (hitDis <= 0.001f)
+        {
+            UpdateParticlePos(collisionVertices[p], -penetration * triNormal);
+            currentPosition += -penetration * triNormal;
+            return;
+        }
+        float3 hitDir = hitOffset / hitDis;
+
+        float totalDistance = hitDis + math.dot(hitDir, pVelocityOffser);
+        // Discard the collision if speculative fails
+        if (totalDistance > 0.01f) return;
+
+        UpdateParticlePos(collisionVertices[p], -penetration * triNormal);
         currentPosition += -penetration * triNormal;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private float3 GetPositionsThroughBary(CollisionVertex cv, bool isPrevious)
+    {
+        float4 bary = cv.baryCoords;
+        int4 tetIdx = cv.tetraIdx;
+
+        if (isPrevious) return bary.x * particles[tetIdx.x].previousPosition +
+                               bary.y * particles[tetIdx.y].previousPosition +
+                               bary.z * particles[tetIdx.z].previousPosition +
+                               bary.w * particles[tetIdx.w].previousPosition;
+
+        return bary.x * particles[tetIdx.x].position +
+               bary.y * particles[tetIdx.y].position +
+               bary.z * particles[tetIdx.z].position +
+               bary.w * particles[tetIdx.w].position;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -713,6 +730,28 @@ public struct PointTriCollision : IJob
         Particle p3 = particles[i3];
         p3.position += b.w * correction;
         particles[i3] = p3;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private float ColParticleInvMass(CollisionVertex cv)
+    {
+        // Indices of the tetra particles
+        int i0 = cv.tetraIdx.x;
+        int i1 = cv.tetraIdx.y;
+        int i2 = cv.tetraIdx.z;
+        int i3 = cv.tetraIdx.w;
+
+        float4 b = cv.baryCoords;
+
+        // Calculate mass
+        float mass = 0;
+        mass += 1f / particles[i0].invMass * b.x;
+        mass += 1f / particles[i1].invMass * b.y;
+        mass += 1f / particles[i2].invMass * b.z;
+        mass += 1f / particles[i3].invMass * b.w;
+
+        // Inverse the total mass
+        return 1f / mass;
     }
 
     // Returns closest point on triangle ABC to point P, and barycentric coords (u,v,w) sums to 1 for that point.
