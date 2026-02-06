@@ -689,7 +689,7 @@ MonoBehaviour:
   mass: 1
   distanceCompliance: 0.001
   volumeCompliance: 0.000001
-  debugCollisionMesh: 0
+  debugCollisionMesh: 1
   debugLatticeCells: 0
 --- !u!23 &225231827
 MeshRenderer:
@@ -1891,7 +1891,7 @@ MonoBehaviour:
   mass: 1000
   distanceCompliance: 0.00001
   volumeCompliance: 0.00000001
-  debugCollisionMesh: 0
+  debugCollisionMesh: 1
   debugLatticeCells: 0
 --- !u!23 &810018554
 MeshRenderer:
@@ -4597,9 +4597,9 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::ObjectInstanceManager
   collisionMesh: {fileID: 2534964839176971238, guid: 173c464fa5d114ef38eb42719d177bed, type: 3}
   latticeDimensions:
-    x: 10
-    y: 8
-    z: 10
+    x: 4
+    y: 4
+    z: 4
   subLatticeMultiplier: 4
   mass: 25
   distanceCompliance: 0.004

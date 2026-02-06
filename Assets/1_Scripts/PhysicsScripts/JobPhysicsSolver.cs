@@ -5,7 +5,6 @@ using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
-using UnityEngine.XR;
 
 #region Jobs
 // -----------------------------------------------------------------------------
@@ -276,70 +275,6 @@ public struct VolumeConstraintsUpdate : IJobParallelFor
 }
 
 // -----------------------------------------------------------------------------
-// SIMPLE COLLISION TEST
-// Keeps particles above y=0. Very crude but safe for testing.
-// -----------------------------------------------------------------------------
-[BurstCompile]
-public struct CrudeCollision : IJob
-{
-    // Lattice particles
-    public NativeArray<Particle> particles;
-
-    // Collision vertices (trilinearly embedded in the lattice)
-    [ReadOnly] public NativeArray<CollisionVertex> collisionVertices;
-
-    public void Execute()
-    {
-        for (int v = 0; v < collisionVertices.Length; v++)
-        {
-            CollisionVertex cv = collisionVertices[v];
-
-            // Indices of the tetra particles
-            int i0 = cv.tetraIdx.x;
-            int i1 = cv.tetraIdx.y;
-            int i2 = cv.tetraIdx.z;
-            int i3 = cv.tetraIdx.w;
-
-            float4 bary = cv.baryCoords;
-
-            float yPos = bary.x * particles[i0].position.y +
-                         bary.y * particles[i1].position.y +
-                         bary.z * particles[i2].position.y +
-                         bary.w * particles[i3].position.y;
-
-            if (yPos >= 0) continue;
-
-            float correction = -yPos;
-
-            Particle p0 = particles[i0];
-            p0.position.y += bary.x * correction;
-            particles[i0] = p0;
-
-            Particle p1 = particles[i1];
-            p1.position.y += bary.y * correction;
-            particles[i1] = p1;
-
-            Particle p2 = particles[i2];
-            p2.position.y += bary.z * correction;
-            particles[i2] = p2;
-
-            Particle p3 = particles[i3];
-            p3.position.y += bary.w * correction;
-            particles[i3] = p3;
-        }
-    }
-
-    private void ApplyCorrection(int idx, float weight, float correction)
-    {
-        if (weight <= 0f) return;
-
-        Particle p = particles[idx];
-        p.position.y += correction * weight;
-        particles[idx] = p;
-    }
-}
-
-// -----------------------------------------------------------------------------
 // COMPLEX COLLISION BETWEEN PARTICLES AND TRIANGLES
 // Keeps particles above y=0. Very crude but safe for testing.
 // -----------------------------------------------------------------------------
@@ -357,11 +292,13 @@ public struct PointTriCollision : IJob
     [ReadOnly] public NativeArray<int3> staticColTriangles;
     [ReadOnly] public NativeArray<int4> staticCollisionEdges;
 
+#region Main execute
     public void Execute()
     {
         for (int p = 0; p < collisionVertices.Length; p++)
         {
             CollisionVertex cv = collisionVertices[p];
+            // Cache the positions for faster acces
             float3 previousPosition = GetPositionsThroughBary(cv, true);
             float3 currentPosition = GetPositionsThroughBary(cv, false);
 
@@ -384,6 +321,7 @@ public struct PointTriCollision : IJob
             CollisionVertex cv1E1 = collisionVertices[edge1Idx.x];
             CollisionVertex cv2E1 = collisionVertices[edge1Idx.y];
 
+            // Cache the positions for faster acces
             float3 previous1E1 = GetPositionsThroughBary(cv1E1, true);
             float3 current1E1 = GetPositionsThroughBary(cv1E1, false);
             float3 previous2E1 = GetPositionsThroughBary(cv2E1, true);
@@ -392,8 +330,10 @@ public struct PointTriCollision : IJob
             for (int e2 = e1 + 1; e2 < collisionEdges.Length; e2++)
             {
                 int2 edge2Idx = collisionEdges[e2].xy;
+                // Avoid casses where edges share a vertex
                 if (edge1Idx.x == edge2Idx.x || edge1Idx.x == edge2Idx.y ||
-                    edge1Idx.y == edge2Idx.x || edge1Idx.y == edge2Idx.y) continue;
+                    edge1Idx.y == edge2Idx.x || edge1Idx.y == edge2Idx.y
+                ) continue;
 
                 EECollision(
                     e1, e2, 
@@ -403,7 +343,10 @@ public struct PointTriCollision : IJob
             }
         }
     }
+#endregion
 
+#region Edge test
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void EECollision(
         int uIdx, int vIdx,
         ref float3 u1_prev, ref float3 u1_curr,
@@ -419,7 +362,7 @@ public struct PointTriCollision : IJob
         float3 v2_curr = GetPositionsThroughBary(v2_cv, false);
 
         // Find closest points to each line at the current positoons
-        LineLineSeparation(u1_curr, u2_curr, v1_curr, v2_curr,
+        float3 unclSepparation = LineLineSeparation(u1_curr, u2_curr, v1_curr, v2_curr,
             out float t1, out float t2
         );
 
@@ -430,20 +373,28 @@ public struct PointTriCollision : IJob
         float3 pOnU = u1_curr + t1 * u;
         float3 pOnV = v1_curr + t2 * v;
 
+        // Calculate realtive velocity of the closest points
         float3 velOnU = (1f - t1) * (u1_curr - u1_prev) + t1 * (u2_curr - u2_prev);
         float3 velOnV = (1f - t2) * (v1_curr - v1_prev) + t2 * (v2_curr - v2_prev);
         float3 relInvVelToU = velOnV - velOnU;
 
+        // Clamped separation for cehcking distance between features
         float3 separation = pOnV - pOnU;
         float sepLength = math.length(separation);
-        if (sepLength <= 1e-06f) return;
+        if (sepLength < 1e-08f) return;
         float3 sepDir = separation / sepLength;
 
         float totalDistance = sepLength - math.dot(relInvVelToU, sepDir);
+        // Speculative check, if it fails don't waste resources on CCD
         if (totalDistance > 0.01f) return;
 
+        // Use unclamped separation to let edges slide
+        float unclSepLength = math.length(unclSepparation);
+        if (unclSepLength < 1e-08f) return;
+        sepDir = unclSepparation / unclSepLength;
+
         // CCD check
-        if (!EdgeEdgeCCD_Boolean(
+        if (!CCDMath.EdgeEdgeCCD_Boolean(
             u1_prev, u2_prev, v1_prev, v2_prev,
             u1_curr, u2_curr, v1_curr, v2_curr
         )) return;
@@ -451,7 +402,7 @@ public struct PointTriCollision : IJob
         // Collision response
         CollisionVertex u1_cv = collisionVertices[collisionEdges[uIdx].x];
         CollisionVertex u2_cv = collisionVertices[collisionEdges[uIdx].y];
-        float C = -sepLength - 0.01f;
+        float C = -unclSepLength - 0.01f;
 
         float3 u1_grad = sepDir * (1f - t1);
         float3 u2_grad = sepDir * t1;
@@ -472,6 +423,7 @@ public struct PointTriCollision : IJob
 
         float deltaLambda = -C / sumWeightedGradients;
 
+        // Update particles and cache the current ones
         UpdateParticlePos(u1_cv, u1_invMass * deltaLambda * u1_grad);
         u1_curr += u1_invMass * deltaLambda * u1_grad;
         UpdateParticlePos(u2_cv, u2_invMass * deltaLambda * u2_grad);
@@ -481,91 +433,10 @@ public struct PointTriCollision : IJob
         UpdateParticlePos(v2_cv, v2_invMass * deltaLambda * v2_grad);
     }
 
-    double3 D(float3 v) => new double3(v.x, v.y, v.z);
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool EdgeEdgeCCD_Boolean(
-        float3 a0_0, float3 a1_0, float3 b0_0, float3 b1_0,
-        float3 a0_1, float3 a1_1, float3 b0_1, float3 b1_1,
-        float epsPos = 1e-5f,
-        float epsParallel = 1e-12f)
-    {
-        // Convert once
-        double3 A0_0 = D(a0_0), A1_0 = D(a1_0), B0_0 = D(b0_0), B1_0 = D(b1_0);
-        double3 A0_1 = D(a0_1), A1_1 = D(a1_1), B0_1 = D(b0_1), B1_1 = D(b1_1);
 
-        // Build cubic coefficients for s(t) = r(t) · (da(t) × db(t)) = 0
-        double3 r0 = B0_0 - A0_0;
-        double3 r1 = (B0_1 - B0_0) - (A0_1 - A0_0);
+#endregion
 
-        double3 da0 = A1_0 - A0_0;
-        double3 da1 = (A1_1 - A1_0) - (A0_1 - A0_0);
-
-        double3 db0 = B1_0 - B0_0;
-        double3 db1 = (B1_1 - B1_0) - (B0_1 - B0_0);
-
-        double3 n0 = math.cross(da0, db0);
-        double3 n1 = math.cross(da0, db1) + math.cross(da1, db0);
-        double3 n2 = math.cross(da1, db1);
-
-        double c0 = math.dot(r0, n0);
-        double c1 = math.dot(r0, n1) + math.dot(r1, n0);
-        double c2 = math.dot(r0, n2) + math.dot(r1, n1);
-        double c3 = math.dot(r1, n2);
-
-        // If it's identically ~0, that's the coplanar/degenerate case you said you can ignore.
-        if (math.abs(c0) + math.abs(c1) + math.abs(c2) + math.abs(c3) < 1e-18)
-            return false;
-
-        // Solve cubic in [0,1] with fixed-size outputs
-        double3 roots;
-        int3 valid;
-        int n = CCDMath.SolveCubic01(c0, c1, c2, c3, out roots, out valid);
-
-        if (n == 0) return false;
-
-        double epsPos2 = (double)epsPos * (double)epsPos;
-        double epsPar = (double)epsParallel;
-
-        // Fixed-size loop (unrolled via valid mask)
-        // root 0
-        if (valid.x != 0 && IntersectAtT(roots.x)) return true;
-        if (valid.y != 0 && IntersectAtT(roots.y)) return true;
-        if (valid.z != 0 && IntersectAtT(roots.z)) return true;
-
-        return false;
-
-        bool IntersectAtT(double t)
-        {
-            // Lerp endpoints at time t
-            double3 a0 = math.lerp(A0_0, A0_1, t);
-            double3 a1 = math.lerp(A1_0, A1_1, t);
-            double3 b0 = math.lerp(B0_0, B0_1, t);
-            double3 b1 = math.lerp(B1_0, B1_1, t);
-
-            double3 da = a1 - a0;
-            double3 db = b1 - b0;
-            double3 r  = b0 - a0;
-
-            double3 nrm = math.cross(da, db);
-            double denom = math.dot(nrm, nrm);
-
-            // Skip near-parallel/coplanar-degenerate validation
-            if (denom < epsPar) return false;
-
-            // Line-line intersection parameters in coplanar case
-            double u = math.dot(math.cross(r, db), nrm) / denom;
-            double v = math.dot(math.cross(r, da), nrm) / denom;
-
-            if (u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0) return false;
-
-            double3 p = a0 + u * da;
-            double3 q = b0 + v * db;
-
-            double3 d = p - q;
-            return math.dot(d, d) <= epsPos2;
-        }
-    }
-
+#region Triangle test
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void SolveDynamicCollision(
         int pointIdx, float3 previousP, ref float3 currentP, int triIdx)
@@ -679,7 +550,9 @@ public struct PointTriCollision : IJob
         UpdateParticlePos(collisionVertices[p], -penetration * triNormal);
         currentPosition += -penetration * triNormal;
     }
+#endregion
 
+#region Common functions
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private float3 GetPositionsThroughBary(CollisionVertex cv, bool isPrevious)
     {
@@ -753,7 +626,9 @@ public struct PointTriCollision : IJob
         // Inverse the total mass
         return 1f / mass;
     }
+#endregion
 
+#region Math functions
     // Returns closest point on triangle ABC to point P, and barycentric coords (u,v,w) sums to 1 for that point.
     // Region-test method consistent with Real-Time Collision Detection.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -885,7 +760,7 @@ public struct PointTriCollision : IJob
     // p1,p2 define line 1; p3,p4 define line 2.
     // Returns separation vector between the *clamped* closest points.
     // t1Clamp, t2Clamp are interpolation parameters clamped to [0,1].
-    public void LineLineSeparation(
+    public float3 LineLineSeparation(
         float3 p1, float3 p2,
         float3 p3, float3 p4,
         out float t1Clamp, out float t2Clamp)
@@ -920,7 +795,13 @@ public struct PointTriCollision : IJob
         // Clamp to [0,1] to treat them as segments/rays
         t1Clamp = math.clamp(s, 0f, 1f);
         t2Clamp = math.clamp(t, 0f, 1f);
+
+        float3 pOnU = p1 + s * u;
+        float3 pOnV = p3 + t * v;
+
+        return pOnV - pOnU;
     }
+#endregion
 }
 
 #endregion
@@ -1075,6 +956,7 @@ public class JobPhysicsSolver : MonoBehaviour
         UpdateVisualMeshes(ref handle);
     }
 
+#region Positions update
     private void UpdatePositions(ref JobHandle handle, float dt)
     {
         // Integrate particle positions using semi-implicit Euler
@@ -1088,7 +970,9 @@ public class JobPhysicsSolver : MonoBehaviour
         // Parallel integration
         handle = positionUpdate.Schedule(particleCount, 64, handle);
     }
+#endregion
 
+#region Constraints update
     private void UpdateConstraints(ref JobHandle handle, float dt)
     {
         // Solve distance constraints across 8 solver batches
@@ -1122,15 +1006,7 @@ public class JobPhysicsSolver : MonoBehaviour
             handle = volumeConstraintsUpdate.Schedule(volumeLengths[i], 1, handle);
         }
 
-        // // Very simple plane collision for starters
-        // CrudeCollision crudeCollision = new CrudeCollision
-        // {
-        //     particles = particles.AsArray(),
-        //     collisionVertices = collisionVertices.AsArray()
-        // };
-        // handle = crudeCollision.Schedule(handle);
-
-        // Complex initial point-triangle collision
+        // Full initial collision handling
         PointTriCollision pointTriCollision = new PointTriCollision
         {
             particles = particles.AsArray(),
@@ -1143,7 +1019,9 @@ public class JobPhysicsSolver : MonoBehaviour
         };
         handle = pointTriCollision.Schedule(handle);
     }
+#endregion
 
+#region Velocitys update
     private void UpdateVelocities(ref JobHandle handle, float dt)
     {
         // Recompute velocities from corrected positional updates
@@ -1155,7 +1033,9 @@ public class JobPhysicsSolver : MonoBehaviour
 
         handle = velocityUpdate.Schedule(particleCount, 10, handle);
     }
+#endregion
 
+#region Visual update
     private void UpdateVisualMeshes(ref JobHandle handle)
     {
         // Compute mesh vertices from lattice particles via trilinear interpolation
@@ -1181,6 +1061,7 @@ public class JobPhysicsSolver : MonoBehaviour
             );
         }
     }
+#endregion
 #endregion
 
 #region Object addition
