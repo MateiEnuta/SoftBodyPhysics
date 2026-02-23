@@ -25,38 +25,16 @@ public struct PositionUpdate : IJobParallelFor
         Particle currentParticle = particles[index];
 
         // Semi-implicit Euler: update velocity first
-        currentParticle.velocity += gravity * dt;
+        float3 velocity = (currentParticle.position - currentParticle.previousPosition) / dt;
+        velocity += gravity * dt;
 
         // Save previous position for velocity reconstruction
         currentParticle.previousPosition = currentParticle.position;
 
         // Integrate new position: x += v * dt
-        currentParticle.position += currentParticle.velocity * dt;
+        currentParticle.position += velocity * dt;
 
         // Write back
-        particles[index] = currentParticle;
-    }
-}
-
-// -----------------------------------------------------------------------------
-// VELOCITY UPDATE JOB
-// Reconstructs velocities from positions after constraints have corrected them.
-// XPBD keeps constraints stable by recomputing velocity from the correction.
-// -----------------------------------------------------------------------------
-[BurstCompile]
-public struct VelocityUpdate : IJobParallelFor
-{
-    [ReadOnly] public float dt;
-    public NativeArray<Particle> particles;
-
-    public void Execute(int index)
-    {
-        Particle currentParticle = particles[index];
-
-        // Velocity = (x_new - x_old) / dt
-        currentParticle.velocity = 
-            (currentParticle.position - currentParticle.previousPosition) / dt;
-
         particles[index] = currentParticle;
     }
 }
@@ -285,12 +263,12 @@ public struct PointTriCollision : IJob
     public NativeArray<Particle> particles;
     [ReadOnly] public NativeArray<CollisionVertex> collisionVertices;
     [ReadOnly] public NativeArray<int3> collisionTriangles;
-    [ReadOnly] public NativeArray<int4> collisionEdges;
+    [ReadOnly] public NativeArray<int2> collisionEdges;
 
     // Static bodies
     [ReadOnly] public NativeArray<float3> staticColPoints;
     [ReadOnly] public NativeArray<int3> staticColTriangles;
-    [ReadOnly] public NativeArray<int4> staticCollisionEdges;
+    [ReadOnly] public NativeArray<int2> staticCollisionEdges;
 
 #region Main execute
     public void Execute()
@@ -317,7 +295,7 @@ public struct PointTriCollision : IJob
 
         for (int e1 = 0; e1 < collisionEdges.Length; e1++)
         {
-            int2 edge1Idx = collisionEdges[e1].xy;
+            int2 edge1Idx = collisionEdges[e1];
             CollisionVertex cv1E1 = collisionVertices[edge1Idx.x];
             CollisionVertex cv2E1 = collisionVertices[edge1Idx.y];
 
@@ -329,7 +307,7 @@ public struct PointTriCollision : IJob
 
             for (int e2 = e1 + 1; e2 < collisionEdges.Length; e2++)
             {
-                int2 edge2Idx = collisionEdges[e2].xy;
+                int2 edge2Idx = collisionEdges[e2];
                 // Avoid casses where edges share a vertex
                 if (edge1Idx.x == edge2Idx.x || edge1Idx.x == edge2Idx.y ||
                     edge1Idx.y == edge2Idx.x || edge1Idx.y == edge2Idx.y
@@ -826,19 +804,15 @@ public struct SoftBodyData
 // Particle data
 public struct Particle
 {
-    public float3 position, previousPosition, velocity;
+    public float3 position, previousPosition;
     public float invMass;
-    public float3 collisionDelta;
-    public float massSum;
 
     public Particle(float3 position, float invMass)
     {
         this.position = position;
         this.invMass = invMass;
 
-        previousPosition = velocity = float3.zero;
-        collisionDelta = float3.zero;
-        massSum = 0;
+        previousPosition =  position;
     }
 }
 
@@ -897,10 +871,10 @@ public class JobPhysicsSolver : MonoBehaviour
     // Collision data
     private NativeList<CollisionVertex> collisionVertices;
     private NativeList<int3> collisionTriangles;
-    private NativeList<int4> collisionEdges;
+    private NativeList<int2> collisionEdges;
     private NativeList<float3> staticColPoints;
     private NativeList<int3> staticColTriangles;
-    private NativeList<int4> staticCollisionEdges;
+    private NativeList<int2> staticCollisionEdges;
 
     // Depricated extra data
     // private NativeList<int3> latticeCollisionTriangles;
@@ -945,9 +919,6 @@ public class JobPhysicsSolver : MonoBehaviour
 
             // Solve all constraints
             UpdateConstraints(ref handle, dt);
-
-            // Reconstruct velocities after corrections
-            UpdateVelocities(ref handle, dt);
 
             JobHandle.ScheduleBatchedJobs();
         }
@@ -1021,20 +992,6 @@ public class JobPhysicsSolver : MonoBehaviour
     }
 #endregion
 
-#region Velocitys update
-    private void UpdateVelocities(ref JobHandle handle, float dt)
-    {
-        // Recompute velocities from corrected positional updates
-        VelocityUpdate velocityUpdate = new VelocityUpdate
-        {
-            dt = dt,
-            particles = particles.AsArray()
-        };
-
-        handle = velocityUpdate.Schedule(particleCount, 10, handle);
-    }
-#endregion
-
 #region Visual update
     private void UpdateVisualMeshes(ref JobHandle handle)
     {
@@ -1077,7 +1034,7 @@ public class JobPhysicsSolver : MonoBehaviour
         VisualVertex[] bodyVisualVerticesBary,
         CollisionVertex[] bodyCollisionVertices,
         int3[] bodyCollisionTriangles,
-        int4[] bodyCollisionEdges,
+        int2[] bodyCollisionEdges,
         List<int3> bodyLatticeCollisionTriangles,
         List<int2> bodyLatticeCollisionEdges)
     {
@@ -1152,7 +1109,7 @@ public class JobPhysicsSolver : MonoBehaviour
         for (int i = 0; i < bodyCollisionEdges.Length; i++)
         {
             // Add a new edge with the offset
-            collisionEdges.Add(bodyCollisionEdges[i] + new int4(collisionVerticesOffset));
+            collisionEdges.Add(bodyCollisionEdges[i] + new int2(collisionVerticesOffset));
         }
 
         // Depricated data
@@ -1200,15 +1157,12 @@ public class JobPhysicsSolver : MonoBehaviour
         // Initialise collision data
         collisionVertices = new NativeList<CollisionVertex>(Allocator.Persistent);
         collisionTriangles = new NativeList<int3>(Allocator.Persistent);
-        collisionEdges = new NativeList<int4>(Allocator.Persistent);
+        collisionEdges = new NativeList<int2>(Allocator.Persistent);
 
         // Initialise static collision data
         staticColPoints = new NativeList<float3>(Allocator.Persistent);
         staticColTriangles = new NativeList<int3>(Allocator.Persistent);
-        staticCollisionEdges = new NativeList<int4>(Allocator.Persistent);
-        // Temp Lists
-        Dictionary<int2, int> edgeHash = new Dictionary<int2, int>();
-        List<int4> auxEdgeList = new List<int4>();
+        staticCollisionEdges = new NativeList<int2>(Allocator.Persistent);
         for (int i = 0; i < staticMeshes.Count; i++)
         {
             Mesh currentStaticMesh = staticMeshes[i].GetComponent<MeshFilter>().mesh;
@@ -1222,8 +1176,6 @@ public class JobPhysicsSolver : MonoBehaviour
 
             // Add static edges and traingles
             int[] colMeshTris = currentStaticMesh.triangles;
-            edgeHash.Clear();
-            auxEdgeList.Clear();
             for (int t = 0; t < colMeshTris.Length / 3; t++)
             {
                 // Get the coresponding triangle vertex indexes
@@ -1235,31 +1187,15 @@ public class JobPhysicsSolver : MonoBehaviour
                 staticColTriangles.Add(new int3(i0, i1, i2));
 
                 // Adds the edges with ascending order in the hash
-                AddEdge(i0, i1, i2, edgeHash, auxEdgeList);
-                AddEdge(i1, i2, i0, edgeHash, auxEdgeList);
-                AddEdge(i2, i0, i1, edgeHash, auxEdgeList);
+                if (i0 < i1) staticCollisionEdges.Add(new int2(i0, i1));
+                if (i1 < i2) staticCollisionEdges.Add(new int2(i1, i2));
+                if (i2 < i0) staticCollisionEdges.Add(new int2(i2, i0));
             }
-
-            foreach (int4 edge in auxEdgeList) staticCollisionEdges.Add(edge);
         }
 
         // Initialise extra collision data
         // latticeCollisionTriangles = new NativeList<int3>(Allocator.Persistent);
         // latticeCollisionEdges = new NativeList<int2>(Allocator.Persistent);
-    }
-
-    private void AddEdge(int i0, int i1, int i2, 
-        Dictionary<int2, int> edgeHash, List<int4> auxEdgeList)
-    {
-        if (edgeHash.TryGetValue(new int2(i1, i0), out int index))
-        {
-            auxEdgeList[index] = new int4(auxEdgeList[index].xyz, i2);
-        }
-        else 
-        {
-            edgeHash.Add(new int2(i0, i1), auxEdgeList.Count);
-            auxEdgeList.Add(new int4(i0, i1, i2, -1));
-        }
     }
 
     private void OnDestroy()

@@ -106,7 +106,7 @@ public class ObjectInstanceManager : MonoBehaviour
     // Collision mesh data
     private CollisionVertex[] collisionVertices;
     private int3[] collisionTriangles;
-    private int4[] collisionEdges;
+    private int2[] collisionEdges;
     // Lattice mesh data
     private List<int3> latticeCollisionTriangles;
     private List<int2> latticeCollisionEdges;
@@ -508,6 +508,9 @@ public class ObjectInstanceManager : MonoBehaviour
         int[] colMeshTris = collisionMesh.triangles;
         RemoveDuplicateVertices(ref colMeshVerts, ref colMeshTris);
 
+        // Create temporary lists for collision data
+        List<CollisionVertex> tempCollisionVertices = new List<CollisionVertex>();
+
         // Loop though each triangle and add all the cells it intersects
         for (int i = 0; i < colMeshTris.Length; i+=3)
         {
@@ -531,6 +534,105 @@ public class ObjectInstanceManager : MonoBehaviour
             TestMainLatticeCells(minBB, maxBB, v0, v1, v2);
             // Sub lattice tests
             TestSubLatticeCells(minBB, maxBB, v0, v1, v2);
+
+
+            // Calculates the min negative corner idxs
+            float3 minPosInLattice = minBB - latticeNegativeCorner;
+            int3 minNegativeCorner = (int3)(minPosInLattice / latticeLengths);
+
+            // Calculates the max negative corner idxs
+            float3 maxPosInLattice = maxBB - latticeNegativeCorner;
+            int3 maxNegativeCorner = (int3)(maxPosInLattice / latticeLengths);
+
+            // Loop though each cell touched by the triangle bounding box
+            // And cut the triangle for each on of them
+            float3[] xSliceEdges = new float3[5];
+            int xSliceEdgesCount;
+            float3[] ySliceEdges = new float3[7];
+            int ySliceEdgesCount;
+            float3[] zSliceEdges = new float3[9];
+            int zSliceEdgesCount;
+            static void TryCutEdge(float3[] slicedEdges, ref int currentEdgeIdx,
+                float3 v0, float3 v1,  float planeValueBack,  float planeValueFront, int axis)
+            {
+                // Tries to first add the current vertex then the cut edge if it exists
+                if (v0[axis] - planeValueBack > -1e-06f &&
+                    v0[axis] - planeValueFront < 1e-06f) slicedEdges[currentEdgeIdx++] = v0;
+                // Test for plane intersections
+                float3 edgeDir = v1 - v0;
+                if (edgeDir[axis] != 0)
+                {
+                    float t1 = (planeValueBack - v0[axis]) / edgeDir[axis];
+                    float t2 = (planeValueFront - v0[axis]) / edgeDir[axis];
+
+                    // Swap to preserve clock wise orientation
+                    if (t2 < t1) (t2, t1) = (t1, t2);
+
+                    // Add them only if they are exactly between planes
+                    if (t1 > 1e-06f && t1 - 1 < 1e-06f) 
+                        slicedEdges[currentEdgeIdx++] = v0 + t1 * edgeDir;
+                    if (t2 > 1e-06f && t2 - 1 < 1e-06f) 
+                        slicedEdges[currentEdgeIdx++] = v0 + t2 * edgeDir;
+                }
+            }
+            for (int x = minNegativeCorner.x; x <= maxNegativeCorner.x; x++)
+            {
+                float xPlaneValueBack = minNegativeCorner.x + latticeLengths.x * x;
+                float xPlaneValueFront = minNegativeCorner.x + latticeLengths.x * (x + 1);
+                xSliceEdgesCount = 0;
+
+                // Test each triangle edge and
+                // biuld the remaining tri array
+                // v0-v1 edge
+                TryCutEdge(xSliceEdges, ref xSliceEdgesCount, v0, v1, xPlaneValueBack, xPlaneValueFront, 0);
+                // v1-v2 edge
+                TryCutEdge(xSliceEdges, ref xSliceEdgesCount, v1, v2, xPlaneValueBack, xPlaneValueFront, 0);
+                // v2-v0 edge
+                TryCutEdge(xSliceEdges, ref xSliceEdgesCount, v2, v0, xPlaneValueBack, xPlaneValueFront, 0);
+
+                for (int y = minNegativeCorner.y; y <= maxNegativeCorner.y; y++)
+                {
+                    float yPlaneValueBack = minNegativeCorner.y + latticeLengths.y * y;
+                    float yPlaneValueFront = minNegativeCorner.y + latticeLengths.y * (y + 1);
+                    ySliceEdgesCount = 0;
+
+                    // Loop though each edge of the x slice
+                    // cutting and adding it to the y slice list
+                    for (int j = 0; j < xSliceEdgesCount; j++)
+                    {
+                        float3 e0 = xSliceEdges[j];
+                        float3 e1 = j+1 == xSliceEdgesCount ? xSliceEdges[0] : xSliceEdges[j+1];
+                        
+                        // Cut if possible
+                        TryCutEdge(ySliceEdges, ref ySliceEdgesCount, e0, e1, yPlaneValueBack, yPlaneValueFront, 1);
+                    }
+
+                    for (int z = minNegativeCorner.z; z <= maxNegativeCorner.z; z++)
+                    {
+                        float zPlaneValueBack = minNegativeCorner.z + latticeLengths.z * z;
+                        float zPlaneValueFront = minNegativeCorner.z + latticeLengths.z * (z + 1);
+                        zSliceEdgesCount = 0;
+
+                        // Loop though each edge of the y slice
+                        // cutting and adding it to the z slice list
+                        for (int j = 0; j < ySliceEdgesCount; j++)
+                        {
+                            float3 e0 = ySliceEdges[j];
+                            float3 e1 = j+1 == ySliceEdgesCount ? ySliceEdges[0] : ySliceEdges[j+1];
+
+                            // Cut if possible
+                            TryCutEdge(zSliceEdges, ref zSliceEdgesCount, e0, e1, zPlaneValueBack, zPlaneValueFront, 2);
+                        }
+                        if (zSliceEdgesCount == 0) continue;
+
+                        // Double checks if the cell intersects the trianglex
+                        int3 cellCoords = new int3(x, y, z);
+                        int cellID = to1D(cellCoords, latticeDimensions);
+                        
+                        
+                    }
+                }
+            }
         }
 
 
@@ -546,9 +648,24 @@ public class ObjectInstanceManager : MonoBehaviour
         // Sub lattice flood fill
         FillSubLattice(colMeshVerts, colMeshTris, edgeHits, queue);
 
-        // Create collision mesh data
-        // Disperses mass and assigns the collision vertices
-        //// DisperseSubLatticeMass(colMeshVerts);
+        // Add weight to particles using the sub lattice
+        float subCellMass = mass / subLatticeCount;
+        for (int i = 0; i < subLatticeMaxCount; i++)
+        {
+            if (subLatticeCells[i] != 0) continue;
+
+            int3 mainLatticeCorner = to3D(i, subLatticeDimensions) / subLatticeMultiplier;
+            int mainLatticeIndex = to1D(mainLatticeCorner, latticeDimensions);
+
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(0, 0, 0))] += subCellMass / 8f;
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(1, 0, 0))] += subCellMass / 8f;
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(1, 1, 0))] += subCellMass / 8f;
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(0, 1, 0))] += subCellMass / 8f;
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(0, 0, 1))] += subCellMass / 8f;
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(1, 0, 1))] += subCellMass / 8f;
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(1, 1, 1))] += subCellMass / 8f;
+            particleMasses[TryAddParticle(mainLatticeCorner + new int3(0, 1, 1))] += subCellMass / 8f;
+        }
 
         // Loop though each collision vertex add trilinear values and calculate mass
         collisionVertices = new CollisionVertex[colMeshVerts.Length];
@@ -558,11 +675,6 @@ public class ObjectInstanceManager : MonoBehaviour
             float3 posInMainLattice = (float3)colMeshVerts[i] - latticeNegativeCorner;
             int3 mainNegativeCorner = (int3)(posInMainLattice / latticeLengths);
             int mainCellID = to1D(mainNegativeCorner, latticeDimensions);
-
-            // position and cellID for the sub lattice
-            float3 posInSubLattice = (float3)colMeshVerts[i] - subLatticeNegativeCorner;
-            int3 subNegativeCorner = (int3)(posInSubLattice / subLatticeLenghts);
-            int subCellID = to1D(subNegativeCorner, subLatticeDimensions);
 
             // Create new collision vertex with the barycentric interpolation based on main mesh
             int cellParity = mainNegativeCorner.x%2 + mainNegativeCorner.y%2 * 2 + mainNegativeCorner.z%2 * 4;
@@ -584,29 +696,9 @@ public class ObjectInstanceManager : MonoBehaviour
             }
         }
 
-        // Add weight to particles using the sub lattice
-        float subCellMass = mass / subLatticeCount;
-        for (int i = 0; i < subLatticeMaxCount; i++)
-        {
-            if (subLatticeCells[i] != 0) continue;
-
-            int3 mainLatticeCorner = to3D(i, subLatticeDimensions) / subLatticeMultiplier;
-            int mainLatticeIndex = to1D(mainLatticeCorner, latticeDimensions);
-
-            particleMasses[TryAddParticle(mainLatticeCorner + new int3(0, 0, 0))] += subCellMass / 8f;
-            particleMasses[TryAddParticle(mainLatticeCorner + new int3(1, 0, 0))] += subCellMass / 8f;
-            particleMasses[TryAddParticle(mainLatticeCorner + new int3(1, 1, 0))] += subCellMass / 8f;
-            particleMasses[TryAddParticle(mainLatticeCorner + new int3(0, 1, 0))] += subCellMass / 8f;
-            particleMasses[TryAddParticle(mainLatticeCorner + new int3(0, 0, 1))] += subCellMass / 8f;
-            particleMasses[TryAddParticle(mainLatticeCorner + new int3(1, 0, 1))] += subCellMass / 8f;
-            particleMasses[TryAddParticle(mainLatticeCorner + new int3(1, 1, 1))] += subCellMass / 8f;
-            particleMasses[TryAddParticle(mainLatticeCorner + new int3(0, 1, 1))] += subCellMass / 8f;
-        }
-
         // Assign triangles and edges
         collisionTriangles = new int3[colMeshTris.Length / 3];
-        Dictionary<int2, int> edgeHash = new Dictionary<int2, int>();
-        List<int4> auxEdgeList = new List<int4>();
+        List<int2> auxEdgeList = new List<int2>();
         for (int i = 0; i < colMeshTris.Length / 3; i++)
         {
             // Get the coresponding triangle vertex indexes
@@ -618,26 +710,12 @@ public class ObjectInstanceManager : MonoBehaviour
             collisionTriangles[i] = new int3(i0, i1, i2);
 
             // Adds the edges with ascending order in the hash
-            AddEdge(i0, i1, i2, edgeHash, auxEdgeList);
-            AddEdge(i1, i2, i0, edgeHash, auxEdgeList);
-            AddEdge(i2, i0, i1, edgeHash, auxEdgeList);
+            if (i0 < i1) auxEdgeList.Add(new int2(i0, i1));
+            if (i1 < i2) auxEdgeList.Add(new int2(i1, i2));
+            if (i2 < i0) auxEdgeList.Add(new int2(i2, i0));
         }
 
         collisionEdges = auxEdgeList.ToArray();
-    }
-
-    private void AddEdge(int i0, int i1, int i2, 
-        Dictionary<int2, int> edgeHash, List<int4> auxEdgeList)
-    {
-        if (edgeHash.TryGetValue(new int2(i1, i0), out int index))
-        {
-            auxEdgeList[index] = new int4(auxEdgeList[index].xyz, i2);
-        }
-        else 
-        {
-            edgeHash.Add(new int2(i0, i1), auxEdgeList.Count);
-            auxEdgeList.Add(new int4(i0, i1, i2, -1));
-        }
     }
 
 #region Triangle Fill
