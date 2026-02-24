@@ -46,13 +46,11 @@ public struct CollisionVertex
 {
     public int4 tetraIdx;
     public float4 baryCoords;
-    public float invMass;
 
-    public CollisionVertex(int4 tetraIdx, float4 baryCoords, float invMass)
+    public CollisionVertex(int4 tetraIdx, float4 baryCoords)
     {
         this.tetraIdx = tetraIdx;
         this.baryCoords = baryCoords;
-        this.invMass = invMass;
     }
 }
 #endregion
@@ -510,6 +508,8 @@ public class ObjectInstanceManager : MonoBehaviour
 
         // Create temporary lists for collision data
         List<CollisionVertex> tempCollisionVertices = new List<CollisionVertex>();
+        List<int3> tempCollisionTriangles = new List<int3>();
+        List<int2> tempCollisionEdges = new List<int2>();
 
         // Loop though each triangle and add all the cells it intersects
         for (int i = 0; i < colMeshTris.Length; i+=3)
@@ -577,8 +577,8 @@ public class ObjectInstanceManager : MonoBehaviour
             }
             for (int x = minNegativeCorner.x; x <= maxNegativeCorner.x; x++)
             {
-                float xPlaneValueBack = minNegativeCorner.x + latticeLengths.x * x;
-                float xPlaneValueFront = minNegativeCorner.x + latticeLengths.x * (x + 1);
+                float xPlaneValueBack = latticeNegativeCorner.x + latticeLengths.x * x;
+                float xPlaneValueFront = latticeNegativeCorner.x + latticeLengths.x * (x + 1);
                 xSliceEdgesCount = 0;
 
                 // Test each triangle edge and
@@ -592,8 +592,8 @@ public class ObjectInstanceManager : MonoBehaviour
 
                 for (int y = minNegativeCorner.y; y <= maxNegativeCorner.y; y++)
                 {
-                    float yPlaneValueBack = minNegativeCorner.y + latticeLengths.y * y;
-                    float yPlaneValueFront = minNegativeCorner.y + latticeLengths.y * (y + 1);
+                    float yPlaneValueBack = latticeNegativeCorner.y + latticeLengths.y * y;
+                    float yPlaneValueFront = latticeNegativeCorner.y + latticeLengths.y * (y + 1);
                     ySliceEdgesCount = 0;
 
                     // Loop though each edge of the x slice
@@ -609,8 +609,8 @@ public class ObjectInstanceManager : MonoBehaviour
 
                     for (int z = minNegativeCorner.z; z <= maxNegativeCorner.z; z++)
                     {
-                        float zPlaneValueBack = minNegativeCorner.z + latticeLengths.z * z;
-                        float zPlaneValueFront = minNegativeCorner.z + latticeLengths.z * (z + 1);
+                        float zPlaneValueBack = latticeNegativeCorner.z + latticeLengths.z * z;
+                        float zPlaneValueFront = latticeNegativeCorner.z + latticeLengths.z * (z + 1);
                         zSliceEdgesCount = 0;
 
                         // Loop though each edge of the y slice
@@ -623,17 +623,61 @@ public class ObjectInstanceManager : MonoBehaviour
                             // Cut if possible
                             TryCutEdge(zSliceEdges, ref zSliceEdgesCount, e0, e1, zPlaneValueBack, zPlaneValueFront, 2);
                         }
-                        if (zSliceEdgesCount == 0) continue;
+                        if (zSliceEdgesCount <= 2) continue;
 
                         // Double checks if the cell intersects the trianglex
                         int3 cellCoords = new int3(x, y, z);
                         int cellID = to1D(cellCoords, latticeDimensions);
+                        AddLatticeCell(cellCoords, cellID);
                         
-                        
+                        // Create new triangles
+                        int startingTempColCount = tempCollisionVertices.Count;
+                        for (int j = 0; j < zSliceEdgesCount; j++)
+                        {
+                            // Create new collision vertex with the barycentric interpolation based on main mesh
+                            int cellParity = cellCoords.x%2 + cellCoords.y%2 * 2 + cellCoords.z%2 * 4;
+                            int tetraStart = latticeTetraStart[cellID];
+                            for (int tet = tetraStart; tet < tetraStart + 5; tet++)
+                            {
+                                // Test in what tetra does the new collision vertex is contained
+                                int4 currentTet = volumeConstraints[cellParity][tet].pidx;
+                                if (TryGetBarycentricInclusive(zSliceEdges[j],
+                                    particles[currentTet.x], particles[currentTet.y],
+                                    particles[currentTet.z], particles[currentTet.w],
+                                    out float4 bary))
+                                {
+                                    tempCollisionVertices.Add(new CollisionVertex(
+                                        currentTet, bary
+                                    ));
+                                }
+                            }
+
+                            // Test if a triangle could be created
+                            if (j == 0 || j+1 >= zSliceEdgesCount) continue;
+
+                            // Add a new triangle formed by the first vertex
+                            // the current one and the next vertex
+                            tempCollisionTriangles.Add(new int3(
+                                startingTempColCount, 
+                                tempCollisionVertices.Count - 1, 
+                                tempCollisionVertices.Count
+                            ));
+
+                            // Add the outside and inside edge (common between 2 tries if they exist)
+                            tempCollisionEdges.Add(new int2(startingTempColCount, tempCollisionVertices.Count - 1));
+                            tempCollisionEdges.Add(new int2(tempCollisionVertices.Count - 1, tempCollisionVertices.Count));
+                        }
+                        // Then add the last outisde edge
+                        tempCollisionEdges.Add(new int2(tempCollisionVertices.Count - 1, startingTempColCount));
                     }
                 }
             }
         }
+
+        // Assign newly created lists
+        collisionVertices = tempCollisionVertices.ToArray();
+        collisionTriangles = tempCollisionTriangles.ToArray();
+        collisionEdges = tempCollisionEdges.ToArray();
 
 
         // Add cells that are inside using flood fill for speed
@@ -655,8 +699,8 @@ public class ObjectInstanceManager : MonoBehaviour
             if (subLatticeCells[i] != 0) continue;
 
             int3 mainLatticeCorner = to3D(i, subLatticeDimensions) / subLatticeMultiplier;
-            int mainLatticeIndex = to1D(mainLatticeCorner, latticeDimensions);
 
+            // Add mass to each xpbd particle
             particleMasses[TryAddParticle(mainLatticeCorner + new int3(0, 0, 0))] += subCellMass / 8f;
             particleMasses[TryAddParticle(mainLatticeCorner + new int3(1, 0, 0))] += subCellMass / 8f;
             particleMasses[TryAddParticle(mainLatticeCorner + new int3(1, 1, 0))] += subCellMass / 8f;
@@ -666,56 +710,6 @@ public class ObjectInstanceManager : MonoBehaviour
             particleMasses[TryAddParticle(mainLatticeCorner + new int3(1, 1, 1))] += subCellMass / 8f;
             particleMasses[TryAddParticle(mainLatticeCorner + new int3(0, 1, 1))] += subCellMass / 8f;
         }
-
-        // Loop though each collision vertex add trilinear values and calculate mass
-        collisionVertices = new CollisionVertex[colMeshVerts.Length];
-        for (int i = 0; i < colMeshVerts.Length; i++)
-        {
-            // position in main lattice
-            float3 posInMainLattice = (float3)colMeshVerts[i] - latticeNegativeCorner;
-            int3 mainNegativeCorner = (int3)(posInMainLattice / latticeLengths);
-            int mainCellID = to1D(mainNegativeCorner, latticeDimensions);
-
-            // Create new collision vertex with the barycentric interpolation based on main mesh
-            int cellParity = mainNegativeCorner.x%2 + mainNegativeCorner.y%2 * 2 + mainNegativeCorner.z%2 * 4;
-            int tetraStart = latticeTetraStart[mainCellID];
-            for (int tet = tetraStart; tet < tetraStart + 5; tet++)
-            {
-                int4 currentTet = volumeConstraints[cellParity][tet].pidx;
-                if (TryGetBarycentricInclusive((float3)colMeshVerts[i],
-                    particles[currentTet.x], particles[currentTet.y],
-                    particles[currentTet.z], particles[currentTet.w],
-                    out float4 bary))
-                {
-                    collisionVertices[i] = new CollisionVertex(
-                        currentTet,
-                        bary,
-                        0
-                    );
-                }
-            }
-        }
-
-        // Assign triangles and edges
-        collisionTriangles = new int3[colMeshTris.Length / 3];
-        List<int2> auxEdgeList = new List<int2>();
-        for (int i = 0; i < colMeshTris.Length / 3; i++)
-        {
-            // Get the coresponding triangle vertex indexes
-            int i0 = colMeshTris[i*3];
-            int i1 = colMeshTris[i*3+1];
-            int i2 = colMeshTris[i*3+2];
-
-            // Assign triangles
-            collisionTriangles[i] = new int3(i0, i1, i2);
-
-            // Adds the edges with ascending order in the hash
-            if (i0 < i1) auxEdgeList.Add(new int2(i0, i1));
-            if (i1 < i2) auxEdgeList.Add(new int2(i1, i2));
-            if (i2 < i0) auxEdgeList.Add(new int2(i2, i0));
-        }
-
-        collisionEdges = auxEdgeList.ToArray();
     }
 
 #region Triangle Fill
@@ -798,11 +792,11 @@ public class ObjectInstanceManager : MonoBehaviour
         float3 closestPoint = ClosestPointInTriangle(cellMiddle, a, b, c);
 
         // Check if the closest point is inside the lattice
-        if (closestPoint.x > cellNegativeCorner.x + cellLenghts.x || closestPoint.x < cellNegativeCorner.x)
+        if (closestPoint.x > cellNegativeCorner.x + cellLenghts.x + 1e-06f || closestPoint.x < cellNegativeCorner.x - 1e-06f)
             return false;
-        if (closestPoint.y > cellNegativeCorner.y + cellLenghts.y || closestPoint.y < cellNegativeCorner.y)
+        if (closestPoint.y > cellNegativeCorner.y + cellLenghts.y + 1e-06f || closestPoint.y < cellNegativeCorner.y - 1e-06f)
             return false;
-        if (closestPoint.z > cellNegativeCorner.z + cellLenghts.z || closestPoint.z < cellNegativeCorner.z)
+        if (closestPoint.z > cellNegativeCorner.z + cellLenghts.z + 1e-06f || closestPoint.z < cellNegativeCorner.z - 1e-06f)
             return false;
         return true;
     }
@@ -928,137 +922,6 @@ public class ObjectInstanceManager : MonoBehaviour
         }
     }
 #endregion
-
-#region Mass dispersion
-    /// <summary>
-    /// Disperses the mass on the populated sub lattice cells.
-    /// A populated cell is one in which at least one collision vertex is present.
-    /// Runs flood fill to disperse the whole lattice.
-    /// And creates the collision vertices list.
-    /// </summary>
-    private void DisperseSubLatticeMass(Vector3[] colMeshVerts)
-    {
-        // Queue for setting sub lattice cell influence
-        Queue<int2> massQueue = new Queue<int2>(subLatticeMaxCount * (1/8));
-
-        // For cases where 2 collision vertices are in the same sub cell
-        int[] massDivider = new int[colMeshVerts.Length];
-
-        // Loop though each particle and enqueue their values
-        for (int i = 0; i < colMeshVerts.Length; i++)
-        {
-            float3 posInSubLattice = (float3)colMeshVerts[i] - subLatticeNegativeCorner;
-            int3 negativeCorner = (int3)(posInSubLattice / subLatticeLenghts);
-            int cellID = to1D(negativeCorner, subLatticeDimensions);
-
-            // Check if the cellID is empty
-            if (subLatticeCells[cellID] == 0)
-            {
-                massDivider[i] = 1;
-                subLatticeCells[cellID] = 1;
-                massQueue.Enqueue(new int2(cellID, cellID));
-            }
-            else
-            {
-                // If not then loop though the particles until now and update them if they share the same cell
-                for (int j = 0; j < i; j++)
-                {
-                    float3 secPosInSubLattice = (float3)colMeshVerts[j] - subLatticeNegativeCorner;
-                    int3 secNegativeCorner = (int3)(secPosInSubLattice / subLatticeLenghts);
-                    int secCellID = to1D(secNegativeCorner, subLatticeDimensions);
-
-                    // Increment if the secondary ID is the same
-                    if (cellID == secCellID) {
-                        massDivider[j]++;
-                        massDivider[i] = massDivider[j];
-                    }
-                }
-            }
-        }
-
-        // Number of active sub cells, used for even distribution
-        int activeSubCellCount = 0;
-
-        // Flood fill with incrementing of the starting cell
-        while (massQueue.Count > 0)
-        {
-            activeSubCellCount++;
-            int2 currentCell = massQueue.Dequeue();
-            int3 cellCoords = to3D(currentCell.x, subLatticeDimensions);
-
-            TryFloodAndIncrementCell(currentCell, cellCoords, 0, false, massQueue);
-            TryFloodAndIncrementCell(currentCell, cellCoords, 0, true, massQueue);
-            TryFloodAndIncrementCell(currentCell, cellCoords, 1, false, massQueue);
-            TryFloodAndIncrementCell(currentCell, cellCoords, 1, true, massQueue);
-            TryFloodAndIncrementCell(currentCell, cellCoords, 2, false, massQueue);
-            TryFloodAndIncrementCell(currentCell, cellCoords, 2, true, massQueue);
-        }
-
-        // Mass of each sub cell
-        float subCellMass = mass / activeSubCellCount;
-        
-        collisionVertices = new CollisionVertex[colMeshVerts.Length];
-
-        // Loop though each collision vertex add trilinear values and calculate mass
-        for (int i = 0; i < colMeshVerts.Length; i++)
-        {
-            // position in main lattice
-            float3 posInMainLattice = (float3)colMeshVerts[i] - latticeNegativeCorner;
-            int3 mainNegativeCorner = (int3)(posInMainLattice / latticeLengths);
-            int mainCellID = to1D(mainNegativeCorner, latticeDimensions);
-
-            // position and cellID for the sub lattice
-            float3 posInSubLattice = (float3)colMeshVerts[i] - subLatticeNegativeCorner;
-            int3 subNegativeCorner = (int3)(posInSubLattice / subLatticeLenghts);
-            int subCellID = to1D(subNegativeCorner, subLatticeDimensions);
-
-            // Create new collision vertex with the barycentric interpolation based on main mesh
-            // and invMass based on sub mesh cell influence and how many other particles
-            // are in the same cell (massDivider)
-            int cellParity = mainNegativeCorner.x%2 + mainNegativeCorner.y%2 * 2 + mainNegativeCorner.z%2 * 4;
-            int tetraStart = latticeTetraStart[mainCellID];
-            for (int tet = tetraStart; tet < tetraStart + 5; tet++)
-            {
-                int4 currentTet = volumeConstraints[cellParity][tet].pidx;
-                if (TryGetBarycentricInclusive((float3)colMeshVerts[i],
-                    particles[currentTet.x], particles[currentTet.y],
-                    particles[currentTet.z], particles[currentTet.w],
-                    out float4 bary))
-                {
-                    collisionVertices[i] = new CollisionVertex(
-                        currentTet,
-                        bary,
-                        1f / (subLatticeCells[subCellID] * subCellMass / massDivider[i])
-                    );
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Tries flood filing the given adjacent cell, if it succed it would also increment
-    /// the starting cell influence.
-    /// </summary>
-    private void TryFloodAndIncrementCell(int2 currentCell, int3 cellCoords, int axis, bool sign, Queue<int2> massQueue)
-    {
-        if (cellCoords[axis] + (sign ? 1 : -1) < subLatticeDimensions[axis]
-            && cellCoords[axis] + (sign ? 1 : -1) >= 0)
-        {
-            int3 addition = int3.zero;
-            addition[axis] = sign ? 1 : -1;
-            int3 nextCellCords = cellCoords + addition;
-            int nextCellID = to1D(nextCellCords, subLatticeDimensions);
-
-            if (subLatticeCells[nextCellID] == 0)
-            {
-                subLatticeCells[nextCellID] = -1;
-                massQueue.Enqueue(new int2(nextCellID, currentCell.y));
-                subLatticeCells[currentCell.y]++;
-            }
-        }
-    }
-#endregion
-
 #endregion
 
 #region Clean up

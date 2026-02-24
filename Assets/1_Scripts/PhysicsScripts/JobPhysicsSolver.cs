@@ -1095,8 +1095,7 @@ public class JobPhysicsSolver : MonoBehaviour
             collisionVertices.Add(new CollisionVertex(
                 bodyCollisionVertices[i].tetraIdx +
                 new int4(particlesOffset),
-                bodyCollisionVertices[i].baryCoords,
-                bodyCollisionVertices[i].invMass
+                bodyCollisionVertices[i].baryCoords
             ));
         }
 
