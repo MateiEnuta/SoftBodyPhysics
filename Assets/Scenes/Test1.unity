@@ -274,6 +274,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d170cb8b909964dc5aa613fb8c78ddda, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
+  collisionMesh: {fileID: 289301614986012343, guid: 9fb57d3777a7e46b3b1b733df7310b93, type: 3}
 --- !u!135 &562486236
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -427,6 +428,11 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c161b0c44605e4291977f2d0b37bccd1, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PhysicsSolver
+  latticePreprocessor:
+    targetLatticeSize:
+      x: 1
+      y: 1
+      z: 1
 --- !u!4 &1625525668
 Transform:
   m_ObjectHideFlags: 0
