@@ -8,19 +8,25 @@ public class LatticePreprocessor
 {
     public float3 targetLatticeDimensions = new float3(1,1,1);
 
-
+    // Persistent data
     private float3 latticeNegativeCorner;
     private int3 latticeResolution;
     private float3 latticeDimensions;
     private int[] latticeCells;
+    private float3[] collisionVertices;
+    private int[] collVertsCellIDs;
+    private int4[] collisionTriangles;
+
+    // Single use data
     private List<float3> possibleCollVertices;
-    private List<int3> possibleColTriangles;
+    private List<int> possibleColVerCellID;
+    private List<int4> possibleColTriangles;
 
     // Buffer
     LatticeBody latticeBodyRef;
     Mesh collisionMesh;
-    Vector3[] collisionVertices;
-    int[] collisionTriangles;
+    Vector3[] meshCollisionVertices;
+    int[] meshCollisionTriangles;
 
     public void ProcessLatticeBody(LatticeBody latticeBody)
     {
@@ -64,14 +70,15 @@ public class LatticePreprocessor
 #region Collision Mesh Creator
         // Try getting the collision mesh if there is one
         collisionMesh = latticeBody.collisionMesh == null ? latticeBody.visualMesh : latticeBody.collisionMesh;
-        collisionVertices = collisionMesh.vertices;
-        collisionTriangles = collisionMesh.triangles;
+        meshCollisionVertices = collisionMesh.vertices;
+        meshCollisionTriangles = collisionMesh.triangles;
         // Make sure the collision mesh is as small as possible
-        MeshMath.RemoveDuplicateVertices(ref collisionVertices, ref collisionTriangles, 1e-06f);
+        MeshMath.RemoveDuplicateVertices(ref meshCollisionVertices, ref meshCollisionTriangles, 1e-06f);
 
         // Generate new lists for possible collision gemetry
         possibleCollVertices = new List<float3>();
-        possibleColTriangles = new List<int3>();
+        possibleColVerCellID = new List<int>();
+        possibleColTriangles = new List<int4>();
 
         // Pre allocate data for the mesh cutter
         float3[] xSliceEdges = new float3[5];
@@ -81,11 +88,11 @@ public class LatticePreprocessor
         float3[] zSliceEdges = new float3[9];
         int zSliceEdgesCount;
         // Run through each ref triangle and cut it
-        for (int t = 0; t < collisionTriangles.Length; t+=3)
+        for (int t = 0; t < meshCollisionTriangles.Length; t+=3)
         {
-            float3 t1 = collisionVertices[collisionTriangles[t]];
-            float3 t2 = collisionVertices[collisionTriangles[t+1]];
-            float3 t3 = collisionVertices[collisionTriangles[t+2]];
+            float3 t1 = meshCollisionVertices[meshCollisionTriangles[t]];
+            float3 t2 = meshCollisionVertices[meshCollisionTriangles[t+1]];
+            float3 t3 = meshCollisionVertices[meshCollisionTriangles[t+2]];
 
             // Calculate the min and max corners of the bounding box
             float3 minBB = new float3(
@@ -192,28 +199,49 @@ public class LatticePreprocessor
                         // Create new triangles
                         int initialPossVertCount = possibleCollVertices.Count;
                         possibleCollVertices.Add(zSliceEdges[0]);
+                        possibleColVerCellID.Add(cellID);
                         for (int i = 1; i < zSliceEdgesCount - 1; i++)
                         {
                             // Add a new triangle formed by the first vertex,
                             // the current one and the next vertex
-                            possibleColTriangles.Add(new int3(
+                            possibleColTriangles.Add(new int4(
                                 initialPossVertCount,           // Pivot vertex
                                 possibleCollVertices.Count,     // Current vertex
-                                possibleCollVertices.Count + 1  // Next vertex
+                                possibleCollVertices.Count + 1, // Next vertex
+                                cellID                          // current cellID
                             ));
 
                             // Add the new point
                             possibleCollVertices.Add(zSliceEdges[i]);
+                            possibleColVerCellID.Add(cellID);
                         }
                         // Add the last vertex
                         possibleCollVertices.Add(zSliceEdges[zSliceEdgesCount - 1]);
+                        possibleColVerCellID.Add(cellID);
                     }
                 }
             }
 #endregion
-
-            
         }
+#region Collision data handler
+        // Clean up to avoid duplicate collision vertices
+        MeshMath.RemoveDuplicateVerticesPerCell(possibleCollVertices, possibleColVerCellID, possibleColTriangles, 1e-06f);
+
+        // Convert final collision data
+        collisionVertices   = possibleCollVertices.ToArray();
+        collVertsCellIDs    = possibleColVerCellID.ToArray();
+        collisionTriangles  = possibleColTriangles.ToArray();
+
+        // Trash the unused lists
+        possibleCollVertices = null;
+        possibleColVerCellID = null;
+        possibleColTriangles = null;
+
+        // Radix sort the arrays by the cellID
+        HelperAlgorithms.SortVertsAndRemapTris(collVertsCellIDs, collisionVertices, collisionTriangles);
+
+        
+#endregion
 #endregion
     }
 
