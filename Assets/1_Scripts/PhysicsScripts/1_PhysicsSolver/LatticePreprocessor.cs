@@ -2,31 +2,81 @@ using UnityEngine;
 using System;
 using Unity.Mathematics;
 using System.Collections.Generic;
+using SolverStructs;
+
+readonly struct Vec3Key : IEquatable<Vec3Key>
+{
+    private readonly int x, y, z;
+
+    public Vec3Key(Vector3 v, float tol)
+    {
+        float inv = 1f / tol;
+        x = Mathf.RoundToInt(v.x * inv);
+        y = Mathf.RoundToInt(v.y * inv);
+        z = Mathf.RoundToInt(v.z * inv);
+    }
+
+    public bool Equals(Vec3Key other) => x == other.x && y == other.y && z == other.z;
+    public override bool Equals(object obj) => obj is Vec3Key other && Equals(other);
+    public override int GetHashCode()
+    {
+        unchecked
+        {
+            int h = 17;
+            h = h * 31 + x;
+            h = h * 31 + y;
+            h = h * 31 + z;
+            return h;
+        }
+    }
+}
 
 [Serializable]
 public class LatticePreprocessor
 {
+    static readonly int4[] s_CellTets = new[]
+    {
+        new int4(0, 1, 3, 7),
+        new int4(0, 3, 2, 7),
+        new int4(0, 2, 6, 7),
+        new int4(0, 6, 4, 7),
+        new int4(0, 4, 5, 7),
+    };
+
     public float3 targetLatticeDimensions = new float3(1,1,1);
 
+    // --------------Lattice data--------------
+    // Helper data
+    private int[] latticeCells;
+    private List<int> activeCells;
+    private int[] particles;
     // Persistent data
-    private LatticeBody latticeBodyRef;
-    // Lattice data
     private float3 latticeNegativeCorner;
     private int3 latticeResolution;
     private float3 latticeDimensions;
-    private int[] latticeCells;
-    private List<int> activeCells;
-    private int[] particlesIdx;
-    private List<float3> activeParticles;
-    // Collision data
+    private List<int> activeParticles;
 
-    // Visual data
+    // --------------Collision data--------------
+    // Helper data
+    private Dictionary<Vec3Key, int>[] cellColParticlesIdx;
+    private List<float3>[]             cellColParticles;
+    private List<int3>[]               cellColTriangles;
+    private HashSet<int2>[]            cellColEdges;
+    private int totalColParticles;
+    private int totalColTriangles;
+    private int totalColEdges;
+    // Persistent data
+    private DynamicVertex[] collisionVertices;
+    private int3[]            collisionTriangles;
+    private int2[]            collisionEdges;
+    private CollisionWraper[] collisionWrapers;
+
+    // --------------Visual data--------------
 
     public void ProcessLatticeBody(LatticeBody latticeBody)
     {
-#region Setup
+    #region Setup
         if (latticeBody.visualMesh == null) return;
-        latticeBodyRef = latticeBody;
 
         // Calculate the lattice parameters
         Bounds visualMeshBounds = latticeBody.visualMesh.bounds;
@@ -56,28 +106,33 @@ public class LatticePreprocessor
         );
 
         // Lattice setup
-        latticeCells = new int[latticeResolution.x * latticeResolution.y * latticeResolution.z];
-        for (int i = 0; i < latticeCells.Length; i++) latticeCells[i] = -1;
-        activeCells = new List<int>();
-        // Paritcle setup
-        particlesIdx = new int[(latticeResolution.x + 1) * (latticeResolution.y + 1) * (latticeResolution.z + 1)];
-        for (int i = 0; i < particlesIdx.Length; i++) particlesIdx[i] = -1;
-        activeParticles = new List<float3>();
-#endregion
+        int maxNumberOfCells = latticeResolution.x * latticeResolution.y * latticeResolution.z;
+        latticeCells = new int[maxNumberOfCells];
+        for (int i = 0; i < maxNumberOfCells; i++) latticeCells[i] = -1;
+        activeCells = new List<int>(maxNumberOfCells / 2);
+        // Collision data used pre cell
+        cellColParticlesIdx = new Dictionary<Vec3Key, int>[maxNumberOfCells];
+        cellColParticles = new List<float3>[maxNumberOfCells];
+        cellColTriangles = new List<int3>[maxNumberOfCells];
+        cellColEdges = new HashSet<int2>[maxNumberOfCells];
+        totalColParticles = 0;
+        totalColTriangles = 0;
+        totalColEdges = 0;
+        // Particle setup
+        int maxNumberOfParticles = (latticeResolution.x + 1) * (latticeResolution.y + 1) * (latticeResolution.z + 1);
+        particles = new int[maxNumberOfParticles];
+        for (int i = 0; i < maxNumberOfParticles; i++) particles[i] = -1;
+        activeParticles = new List<int>(maxNumberOfParticles / 2);
+    #endregion
         
 
-#region Collision Mesh Creator
+    #region Collision Mesh Creator
         // Try getting the collision mesh if there is one
         Mesh collisionMesh = latticeBody.collisionMesh == null ? latticeBody.visualMesh : latticeBody.collisionMesh;
         Vector3[] meshCollisionVertices = collisionMesh.vertices;
         int[] meshCollisionTriangles = collisionMesh.triangles;
         // Make sure the collision mesh is as small as possible
         MeshMath.RemoveDuplicateVertices(ref meshCollisionVertices, ref meshCollisionTriangles, 1e-06f);
-
-        // Generate new lists for possible collision gemetry
-        List<float3> possibleCollVertices = new List<float3>();
-        List<int> possibleColVerCellID = new List<int>();
-        List<int4> possibleColTriangles = new List<int4>();
 
         // Pre allocate data for the mesh cutter
         float3[] xSliceEdges = new float3[5];
@@ -113,7 +168,7 @@ public class LatticePreprocessor
             float3 maxPosInLattice = maxBB - latticeNegativeCorner;
             int3 maxNegativeCorner = (int3)(maxPosInLattice / latticeDimensions);
 
-#region Cell Cutter
+        #region Cell Cutter
             // Loop though each cell touched by the triangle bounding box
             // And cut the triangle for each on of them
             static void TryCutEdge(float3[] slicedEdges, ref int currentEdgeIdx,
@@ -193,58 +248,114 @@ public class LatticePreprocessor
                         // Double checks if the cell intersects the trianglex
                         int3 cellCoords = new int3(x, y, z);
                         int cellID = to1D(cellCoords);
-                        ActivateCell(cellID);
+                        AddCell(cellID);
+                        if (cellColParticlesIdx[cellID] == null)
+                        {
+                            cellColParticlesIdx[cellID] = new Dictionary<Vec3Key, int>();
+                            cellColParticles[cellID] = new List<float3>();
+                            cellColTriangles[cellID] = new List<int3>();
+                            cellColEdges[cellID] = new HashSet<int2>();
+                        }
                         
-                        // Create new triangles
-                        int initialPossVertCount = possibleCollVertices.Count;
-                        possibleCollVertices.Add(zSliceEdges[0]);
-                        possibleColVerCellID.Add(cellID);
+                        // Add each particle individually
+                        for (int i = 0; i < zSliceEdgesCount; i++)
+                        {
+                            if (cellColParticlesIdx[cellID].TryAdd(new Vec3Key(zSliceEdges[i], 1e-06f), cellColParticles[cellID].Count))
+                            {
+                                totalColParticles++;
+                                cellColParticles[cellID].Add(zSliceEdges[i]);
+                            }
+                        }
+
+                        // Cache the main vertex
+                        int v1 = cellColParticlesIdx[cellID][new Vec3Key(zSliceEdges[0], 1e-06f)];
                         for (int i = 1; i < zSliceEdgesCount - 1; i++)
                         {
-                            // Add a new triangle formed by the first vertex,
-                            // the current one and the next vertex
-                            possibleColTriangles.Add(new int4(
-                                initialPossVertCount,           // Pivot vertex
-                                possibleCollVertices.Count,     // Current vertex
-                                possibleCollVertices.Count + 1, // Next vertex
-                                cellID                          // current cellID
-                            ));
+                            // Compute the next 2 vertices
+                            int v2 = cellColParticlesIdx[cellID][new Vec3Key(zSliceEdges[i], 1e-06f)];
+                            int v3 = cellColParticlesIdx[cellID][new Vec3Key(zSliceEdges[i+1], 1e-06f)];
+                            
+                            // Add the triangle
+                            cellColTriangles[cellID].Add(new int3(v1, v2, v3));
+                            totalColTriangles++;
 
-                            // Add the new point
-                            possibleCollVertices.Add(zSliceEdges[i]);
-                            possibleColVerCellID.Add(cellID);
+                            // Add the edges in ascending index order
+                            if (cellColEdges[cellID].Add(v1 < v2 ? new int2(v1, v2) : new int2(v2, v1))) totalColEdges++;
+                            if (cellColEdges[cellID].Add(v2 < v3 ? new int2(v2, v3) : new int2(v3, v2))) totalColEdges++;
+                            if (cellColEdges[cellID].Add(v3 < v1 ? new int2(v3, v1) : new int2(v1, v3))) totalColEdges++;
                         }
-                        // Add the last vertex
-                        possibleCollVertices.Add(zSliceEdges[zSliceEdgesCount - 1]);
-                        possibleColVerCellID.Add(cellID);
                     }
                 }
             }
-#endregion
+        #endregion
         }
-        // Clean up to avoid duplicate collision vertices
-        MeshMath.RemoveDuplicateVerticesPerCell(possibleCollVertices, possibleColVerCellID, possibleColTriangles, 1e-06f);
 
-        // Radix sort the arrays by the cellID
-        HelperAlgorithms.SortVertsAndRemapTris(possibleColVerCellID, possibleCollVertices, possibleColTriangles);
+        // Setup all permanent collision data
+        collisionVertices  = new DynamicVertex[totalColParticles];
+        collisionTriangles = new int3[totalColTriangles];
+        collisionEdges     = new int2[totalColEdges];
+        collisionWrapers   = new CollisionWraper[activeCells.Count];
+
+        // For knowing at which element we are
+        int currentColVertCount   = 0;
+        int currentColTriCount    = 0;
+        int currentColEdgeCount   = 0;
+        int currentColWraperCount = 0;
+
+        for (int i = 0; i < activeCells.Count; i++)
+        {
+            // Store the initial list count
+            int currentCellID = activeCells[i];
+            int initialColVertCount   = currentColVertCount;
+            int initialColTriCount    = currentColTriCount;
+            int initialColEdgeCount   = currentColEdgeCount;
+
+            // Loop through each collision vertex and store a dynamic vertex
+            for (int j = 0; j < cellColParticles[currentCellID].Count; j++)
+            {
+                collisionVertices[currentColVertCount++] = GetCellDynamicVertex(
+                    currentCellID, 
+                    cellColParticles[currentCellID][j]
+                );
+            }
+
+            // Store the triangles
+            for (int j = 0; j < cellColTriangles[currentCellID].Count; j++)
+            {
+                collisionTriangles[currentColTriCount++] = cellColTriangles[currentCellID][j];
+            }
+
+            // Store the edges
+            foreach (int2 edge in cellColEdges[currentCellID]) collisionEdges[currentColEdgeCount++] = edge;
+
+            // Make a wraper that has this actice cell index
+            collisionWrapers[currentColWraperCount++] = new CollisionWraper(
+                i,
+                new int2(initialColVertCount, currentColVertCount - initialColVertCount),
+                new int2(initialColTriCount, currentColTriCount - initialColTriCount),
+                new int2(initialColEdgeCount, currentColEdgeCount - initialColEdgeCount)
+            );
+        }
+
+        // GC helper data
+        cellColParticlesIdx = null;
+        cellColParticles = null;
+        cellColTriangles = null;
+        cellColEdges = null;
+
+    #endregion
+    #region Visual Mesh Creator
         
-        // Biuld edges in ascending order by the cellID (the .z parameter)
-        List<int3> possibleCollisionEdges = MeshMath.BuildCellSortedEdges(possibleColTriangles);
-
-
-#endregion
-#region Visual Mesh Creator
-        
-#endregion
+    #endregion
     }
 
 #region Common Helper Functions
-    private int to1D(int3 pos)
+    public int to1D(int3 pos)
     {
         return (pos.z * latticeResolution.x * latticeResolution.y) + (pos.y * latticeResolution.x) + pos.x;
     }
 
-    private int3 to3D(int idx)
+    public int3 to3D(int idx)
     {
         int3 result = int3.zero;
         result.z = idx / (latticeResolution.x * latticeResolution.y);
@@ -255,13 +366,25 @@ public class LatticePreprocessor
         return result;
     }
 
-    private int to1D_Particle(int3 pos)
+    public int to1D_Particle(int3 pos)
     {
         int3 particleResolution = latticeResolution + new int3(1, 1, 1);
         return (pos.z * particleResolution.x * particleResolution.y) + (pos.y * particleResolution.x) + pos.x;
     }
 
-    private void ActivateCell(int cellID)
+    public int3 to3D_Particle(int idx)
+    {
+        int3 particleResolution = latticeResolution + new int3(1, 1, 1);
+        int3 result = int3.zero;
+        result.z = idx / (particleResolution.x * particleResolution.y);
+        idx -= result.z * particleResolution.x * particleResolution.y;
+        result.y = idx / particleResolution.x;
+        result.x = idx % particleResolution.x;
+
+        return result;
+    }
+
+    private void AddCell(int cellID)
     {
         if (latticeCells[cellID] != -1) return;
         latticeCells[cellID] = activeCells.Count;
@@ -305,11 +428,71 @@ public class LatticePreprocessor
 
     private void ActivateParticle(int3 currentCorner)
     {
-        if (particlesIdx[to1D_Particle(currentCorner)] == -1)
+        int particleID = to1D_Particle(currentCorner);
+        if (particles[particleID] == -1)
         {
-            particlesIdx[to1D_Particle(currentCorner)] = activeParticles.Count;
-            activeParticles.Add(latticeNegativeCorner + latticeDimensions * currentCorner);
+            particles[particleID] = activeParticles.Count;
+            activeParticles.Add(particleID);
         }
     }
+
+    private DynamicVertex GetCellDynamicVertex(int cellID, float3 vertexPos)
+    {
+        int3 baseCorner = to3D(cellID);
+        float3 cellOrigin = latticeNegativeCorner + (float3)baseCorner * latticeDimensions;
+        float3 p = vertexPos - cellOrigin;
+
+        // Precompute corners as locals (no array alloc)
+        float3 c0 = new float3(0, 0, 0);
+        float3 c1 = new float3(latticeDimensions.x, 0, 0);
+        float3 c2 = new float3(0, latticeDimensions.y, 0);
+        float3 c3 = new float3(latticeDimensions.x, latticeDimensions.y, 0);
+        float3 c4 = new float3(0, 0, latticeDimensions.z);
+        float3 c5 = new float3(latticeDimensions.x, 0, latticeDimensions.z);
+        float3 c6 = new float3(0, latticeDimensions.y, latticeDimensions.z);
+        float3 c7 = new float3(latticeDimensions.x, latticeDimensions.y, latticeDimensions.z);
+
+        const float eps = 1e-6f;
+
+        // Simple function for getting the cached corners
+        float3 GetParticle(int idx)
+        {
+            return idx == 0 ? c0 :
+                   idx == 1 ? c1 :
+                   idx == 2 ? c2 :
+                   idx == 3 ? c3 :
+                   idx == 4 ? c4 :
+                   idx == 5 ? c5 :
+                   idx == 6 ? c6 : c7;
+        }
+
+        // Loop though each tetra and try to find a match for the given vertex
+        for (byte tetIndex = 0; tetIndex < s_CellTets.Length; tetIndex++)
+        {
+            int4 t = s_CellTets[tetIndex];
+
+            float3 a = GetParticle(t.x);
+            float3 b = GetParticle(t.y);
+            float3 c = GetParticle(t.z);
+            float3 d = GetParticle(t.w);
+
+            float3 e0 = a - d;
+            float3 e1 = b - d;
+            float3 e2 = c - d;
+            float3 r  = p - d;
+
+            float3x3 M = new float3x3(e0, e1, e2);
+            float3 lambda012 = math.mul(math.inverse(M), r);
+            float lambda3 = 1f - (lambda012.x + lambda012.y + lambda012.z);
+            float4 bary = new float4(lambda012, lambda3);
+
+            if (bary.x >= -eps && bary.y >= -eps && bary.z >= -eps && bary.w >= -eps)
+                return new DynamicVertex(bary, tetIndex);
+        }
+
+        Debug.LogWarning($"GetCellDynamicVertex: no tetra found for cell {cellID}, pos {vertexPos}");
+        return new DynamicVertex(new float4(1, 0, 0, 0), 0);
+    }
+
 #endregion
 }

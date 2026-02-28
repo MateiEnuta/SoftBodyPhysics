@@ -48,7 +48,7 @@ public struct PositionUpdate : IJobParallelFor
 public struct VisualVerticesUpdate : IJobParallelFor
 {
     [ReadOnly] public NativeArray<Particle> particles;
-    [ReadOnly] public NativeArray<VisualVertex> visualVerticesBary;
+    [ReadOnly] public NativeArray<old_VisualVertex> visualVerticesBary;
     public NativeArray<float3> verticesPositions;
 
     public void Execute(int index)
@@ -261,7 +261,7 @@ public struct PointTriCollision : IJob
 {
     // Dynamic bodies
     public NativeArray<Particle> particles;
-    [ReadOnly] public NativeArray<CollisionVertex> collisionVertices;
+    [ReadOnly] public NativeArray<old_CollisionVertex> collisionVertices;
     [ReadOnly] public NativeArray<int3> collisionTriangles;
     [ReadOnly] public NativeArray<int2> collisionEdges;
 
@@ -275,7 +275,7 @@ public struct PointTriCollision : IJob
     {
         for (int p = 0; p < collisionVertices.Length; p++)
         {
-            CollisionVertex cv = collisionVertices[p];
+            old_CollisionVertex cv = collisionVertices[p];
             // Cache the positions for faster acces
             float3 previousPosition = GetPositionsThroughBary(cv, true);
             float3 currentPosition = GetPositionsThroughBary(cv, false);
@@ -296,8 +296,8 @@ public struct PointTriCollision : IJob
         for (int e1 = 0; e1 < collisionEdges.Length; e1++)
         {
             int2 edge1Idx = collisionEdges[e1];
-            CollisionVertex cv1E1 = collisionVertices[edge1Idx.x];
-            CollisionVertex cv2E1 = collisionVertices[edge1Idx.y];
+            old_CollisionVertex cv1E1 = collisionVertices[edge1Idx.x];
+            old_CollisionVertex cv2E1 = collisionVertices[edge1Idx.y];
 
             // Cache the positions for faster acces
             float3 previous1E1 = GetPositionsThroughBary(cv1E1, true);
@@ -331,8 +331,8 @@ public struct PointTriCollision : IJob
         ref float3 u2_prev, ref float3 u2_curr
     )
     {
-        CollisionVertex v1_cv = collisionVertices[collisionEdges[vIdx].x];
-        CollisionVertex v2_cv = collisionVertices[collisionEdges[vIdx].y];
+        old_CollisionVertex v1_cv = collisionVertices[collisionEdges[vIdx].x];
+        old_CollisionVertex v2_cv = collisionVertices[collisionEdges[vIdx].y];
 
         float3 v1_prev = GetPositionsThroughBary(v1_cv, true);
         float3 v1_curr = GetPositionsThroughBary(v1_cv, false);
@@ -378,8 +378,8 @@ public struct PointTriCollision : IJob
         )) return;
 
         // Collision response
-        CollisionVertex u1_cv = collisionVertices[collisionEdges[uIdx].x];
-        CollisionVertex u2_cv = collisionVertices[collisionEdges[uIdx].y];
+        old_CollisionVertex u1_cv = collisionVertices[collisionEdges[uIdx].x];
+        old_CollisionVertex u2_cv = collisionVertices[collisionEdges[uIdx].y];
         float C = -unclSepLength - 0.01f;
 
         float3 u1_grad = sepDir * (1f - t1);
@@ -421,10 +421,10 @@ public struct PointTriCollision : IJob
     {
         int3 tri = collisionTriangles[triIdx];
 
-        CollisionVertex cvP = collisionVertices[pointIdx];
-        CollisionVertex cv0 = collisionVertices[tri.x];
-        CollisionVertex cv1 = collisionVertices[tri.y];
-        CollisionVertex cv2 = collisionVertices[tri.z];
+        old_CollisionVertex cvP = collisionVertices[pointIdx];
+        old_CollisionVertex cv0 = collisionVertices[tri.x];
+        old_CollisionVertex cv1 = collisionVertices[tri.y];
+        old_CollisionVertex cv2 = collisionVertices[tri.z];
 
         float3 A = GetPositionsThroughBary(cv0, true);
         float3 B = GetPositionsThroughBary(cv1, true);
@@ -532,7 +532,7 @@ public struct PointTriCollision : IJob
 
 #region Common functions
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private float3 GetPositionsThroughBary(CollisionVertex cv, bool isPrevious)
+    private float3 GetPositionsThroughBary(old_CollisionVertex cv, bool isPrevious)
     {
         float4 bary = cv.baryCoords;
         int4 tetIdx = cv.tetraIdx;
@@ -549,7 +549,7 @@ public struct PointTriCollision : IJob
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void UpdateParticlePos(CollisionVertex cv, float3 correction)
+    private void UpdateParticlePos(old_CollisionVertex cv, float3 correction)
     {
         // Indices of the tetra particles
         int i0 = cv.tetraIdx.x;
@@ -584,7 +584,7 @@ public struct PointTriCollision : IJob
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private float ColParticleInvMass(CollisionVertex cv)
+    private float ColParticleInvMass(old_CollisionVertex cv)
     {
         // Indices of the tetra particles
         int i0 = cv.tetraIdx.x;
@@ -861,7 +861,7 @@ public class JobPhysicsSolver : MonoBehaviour
 
     // Mesh vertices data
     private NativeList<float3> viualVerticesPos;
-    private NativeList<VisualVertex> visualVerticesBary;
+    private NativeList<old_VisualVertex> visualVerticesBary;
 
     // Constraints data
     private NativeList<int2>[] distanceConGroups;
@@ -869,7 +869,7 @@ public class JobPhysicsSolver : MonoBehaviour
     private NativeList<VolumeConstraint>[] volumeConstraints;
 
     // Collision data
-    private NativeList<CollisionVertex> collisionVertices;
+    private NativeList<old_CollisionVertex> collisionVertices;
     private NativeList<int3> collisionTriangles;
     private NativeList<int2> collisionEdges;
     private NativeList<float3> staticColPoints;
@@ -1031,8 +1031,8 @@ public class JobPhysicsSolver : MonoBehaviour
         List<int2>[] bodyDisConGroups,
         List<DistanceConstraintRef>[] bodyDisConstraints,
         List<VolumeConstraintRef>[] bodyVolConstraints,
-        VisualVertex[] bodyVisualVerticesBary,
-        CollisionVertex[] bodyCollisionVertices,
+        old_VisualVertex[] bodyVisualVerticesBary,
+        old_CollisionVertex[] bodyCollisionVertices,
         int3[] bodyCollisionTriangles,
         int2[] bodyCollisionEdges,
         List<int3> bodyLatticeCollisionTriangles,
@@ -1059,7 +1059,7 @@ public class JobPhysicsSolver : MonoBehaviour
 
             // Remap indices by particle offset
             visualVerticesBary.Add(
-                new VisualVertex(
+                new old_VisualVertex(
                     bodyVisualVerticesBary[i].tetraIdx +
                     new int4(particlesOffset),
                     bodyVisualVerticesBary[i].baryCoords));
@@ -1092,7 +1092,7 @@ public class JobPhysicsSolver : MonoBehaviour
         for (int i = 0; i < bodyCollisionVertices.Length; i++)
         {
             // Add a new collision vertex with the offset
-            collisionVertices.Add(new CollisionVertex(
+            collisionVertices.Add(new old_CollisionVertex(
                 bodyCollisionVertices[i].tetraIdx +
                 new int4(particlesOffset),
                 bodyCollisionVertices[i].baryCoords
@@ -1139,7 +1139,7 @@ public class JobPhysicsSolver : MonoBehaviour
 
         // Storage for mesh vertices & their lattice mapping
         viualVerticesPos = new NativeList<float3>(Allocator.Persistent);
-        visualVerticesBary = new NativeList<VisualVertex>(Allocator.Persistent);
+        visualVerticesBary = new NativeList<old_VisualVertex>(Allocator.Persistent);
 
         // Initialise per-channel constraint lists
         distanceConGroups = new NativeList<int2>[8];
@@ -1154,7 +1154,7 @@ public class JobPhysicsSolver : MonoBehaviour
         }
 
         // Initialise collision data
-        collisionVertices = new NativeList<CollisionVertex>(Allocator.Persistent);
+        collisionVertices = new NativeList<old_CollisionVertex>(Allocator.Persistent);
         collisionTriangles = new NativeList<int3>(Allocator.Persistent);
         collisionEdges = new NativeList<int2>(Allocator.Persistent);
 

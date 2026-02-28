@@ -30,24 +30,24 @@ public struct VolumeConstraintRef
     }
 }
 
-public struct VisualVertex
+public struct old_VisualVertex
 {
     public int4 tetraIdx;
     public float4 baryCoords;
 
-    public VisualVertex(int4 tetraIdx, float4 baryCoords)
+    public old_VisualVertex(int4 tetraIdx, float4 baryCoords)
     {
         this.tetraIdx = tetraIdx;
         this.baryCoords = baryCoords;
     }
 }
 
-public struct CollisionVertex
+public struct old_CollisionVertex
 {
     public int4 tetraIdx;
     public float4 baryCoords;
 
-    public CollisionVertex(int4 tetraIdx, float4 baryCoords)
+    public old_CollisionVertex(int4 tetraIdx, float4 baryCoords)
     {
         this.tetraIdx = tetraIdx;
         this.baryCoords = baryCoords;
@@ -93,7 +93,7 @@ public class ObjectInstanceManager : MonoBehaviour
     private List<float3> particles;
     private List<float> particleMasses;
     private int[] particlesDictionary;
-    private VisualVertex[] visualVerticesBary;
+    private old_VisualVertex[] visualVerticesBary;
 
     // Constraint data
     private HashSet<int2> addedEdges; // Redundancy list
@@ -102,7 +102,7 @@ public class ObjectInstanceManager : MonoBehaviour
     private List<VolumeConstraintRef>[] volumeConstraints;
 
     // Collision mesh data
-    private CollisionVertex[] collisionVertices;
+    private old_CollisionVertex[] collisionVertices;
     private int3[] collisionTriangles;
     private int2[] collisionEdges;
     // Lattice mesh data
@@ -364,7 +364,7 @@ public class ObjectInstanceManager : MonoBehaviour
     private void LoopVertices()
     {
         meshVertices = mesh.vertices;
-        visualVerticesBary = new VisualVertex[numberOfVertices];
+        visualVerticesBary = new old_VisualVertex[numberOfVertices];
 
         for (int i = 0; i < numberOfVertices; i++)
         {
@@ -387,7 +387,7 @@ public class ObjectInstanceManager : MonoBehaviour
                     particles[currentTet.z], particles[currentTet.w],
                     out float4 bary))
                 {
-                    visualVerticesBary[i] = new VisualVertex(
+                    visualVerticesBary[i] = new old_VisualVertex(
                         currentTet,
                         bary
                     );
@@ -507,7 +507,7 @@ public class ObjectInstanceManager : MonoBehaviour
         RemoveDuplicateVertices(ref colMeshVerts, ref colMeshTris);
 
         // Create temporary lists for collision data
-        List<CollisionVertex> tempCollisionVertices = new List<CollisionVertex>();
+        List<old_CollisionVertex> tempCollisionVertices = new List<old_CollisionVertex>();
         List<int3> tempCollisionTriangles = new List<int3>();
         List<int2> tempCollisionEdges = new List<int2>();
 
@@ -646,7 +646,7 @@ public class ObjectInstanceManager : MonoBehaviour
                                     particles[currentTet.z], particles[currentTet.w],
                                     out float4 bary))
                                 {
-                                    tempCollisionVertices.Add(new CollisionVertex(
+                                    tempCollisionVertices.Add(new old_CollisionVertex(
                                         currentTet, bary
                                     ));
                                 }
