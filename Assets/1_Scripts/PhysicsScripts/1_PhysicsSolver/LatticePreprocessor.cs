@@ -9,24 +9,18 @@ public class LatticePreprocessor
     public float3 targetLatticeDimensions = new float3(1,1,1);
 
     // Persistent data
+    private LatticeBody latticeBodyRef;
+    // Lattice data
     private float3 latticeNegativeCorner;
     private int3 latticeResolution;
     private float3 latticeDimensions;
     private int[] latticeCells;
-    private float3[] collisionVertices;
-    private int[] collVertsCellIDs;
-    private int4[] collisionTriangles;
+    private List<int> activeCells;
+    private int[] particlesIdx;
+    private List<float3> activeParticles;
+    // Collision data
 
-    // Single use data
-    private List<float3> possibleCollVertices;
-    private List<int> possibleColVerCellID;
-    private List<int4> possibleColTriangles;
-
-    // Buffer
-    LatticeBody latticeBodyRef;
-    Mesh collisionMesh;
-    Vector3[] meshCollisionVertices;
-    int[] meshCollisionTriangles;
+    // Visual data
 
     public void ProcessLatticeBody(LatticeBody latticeBody)
     {
@@ -64,21 +58,26 @@ public class LatticePreprocessor
         // Lattice setup
         latticeCells = new int[latticeResolution.x * latticeResolution.y * latticeResolution.z];
         for (int i = 0; i < latticeCells.Length; i++) latticeCells[i] = -1;
+        activeCells = new List<int>();
+        // Paritcle setup
+        particlesIdx = new int[(latticeResolution.x + 1) * (latticeResolution.y + 1) * (latticeResolution.z + 1)];
+        for (int i = 0; i < particlesIdx.Length; i++) particlesIdx[i] = -1;
+        activeParticles = new List<float3>();
 #endregion
         
 
 #region Collision Mesh Creator
         // Try getting the collision mesh if there is one
-        collisionMesh = latticeBody.collisionMesh == null ? latticeBody.visualMesh : latticeBody.collisionMesh;
-        meshCollisionVertices = collisionMesh.vertices;
-        meshCollisionTriangles = collisionMesh.triangles;
+        Mesh collisionMesh = latticeBody.collisionMesh == null ? latticeBody.visualMesh : latticeBody.collisionMesh;
+        Vector3[] meshCollisionVertices = collisionMesh.vertices;
+        int[] meshCollisionTriangles = collisionMesh.triangles;
         // Make sure the collision mesh is as small as possible
         MeshMath.RemoveDuplicateVertices(ref meshCollisionVertices, ref meshCollisionTriangles, 1e-06f);
 
         // Generate new lists for possible collision gemetry
-        possibleCollVertices = new List<float3>();
-        possibleColVerCellID = new List<int>();
-        possibleColTriangles = new List<int4>();
+        List<float3> possibleCollVertices = new List<float3>();
+        List<int> possibleColVerCellID = new List<int>();
+        List<int4> possibleColTriangles = new List<int4>();
 
         // Pre allocate data for the mesh cutter
         float3[] xSliceEdges = new float3[5];
@@ -194,7 +193,7 @@ public class LatticePreprocessor
                         // Double checks if the cell intersects the trianglex
                         int3 cellCoords = new int3(x, y, z);
                         int cellID = to1D(cellCoords);
-                        latticeCells[cellID] = 1;
+                        ActivateCell(cellID);
                         
                         // Create new triangles
                         int initialPossVertCount = possibleCollVertices.Count;
@@ -223,35 +222,29 @@ public class LatticePreprocessor
             }
 #endregion
         }
-#region Collision data handler
         // Clean up to avoid duplicate collision vertices
         MeshMath.RemoveDuplicateVerticesPerCell(possibleCollVertices, possibleColVerCellID, possibleColTriangles, 1e-06f);
 
-        // Convert final collision data
-        collisionVertices   = possibleCollVertices.ToArray();
-        collVertsCellIDs    = possibleColVerCellID.ToArray();
-        collisionTriangles  = possibleColTriangles.ToArray();
-
-        // Trash the unused lists
-        possibleCollVertices = null;
-        possibleColVerCellID = null;
-        possibleColTriangles = null;
-
         // Radix sort the arrays by the cellID
-        HelperAlgorithms.SortVertsAndRemapTris(collVertsCellIDs, collisionVertices, collisionTriangles);
-
+        HelperAlgorithms.SortVertsAndRemapTris(possibleColVerCellID, possibleCollVertices, possibleColTriangles);
         
+        // Biuld edges in ascending order by the cellID (the .z parameter)
+        List<int3> possibleCollisionEdges = MeshMath.BuildCellSortedEdges(possibleColTriangles);
+
+
 #endregion
+#region Visual Mesh Creator
+        
 #endregion
     }
 
 #region Common Helper Functions
-    public int to1D(int3 pos)
+    private int to1D(int3 pos)
     {
         return (pos.z * latticeResolution.x * latticeResolution.y) + (pos.y * latticeResolution.x) + pos.x;
     }
 
-    public int3 to3D(int idx)
+    private int3 to3D(int idx)
     {
         int3 result = int3.zero;
         result.z = idx / (latticeResolution.x * latticeResolution.y);
@@ -260,6 +253,63 @@ public class LatticePreprocessor
         result.x = idx % latticeResolution.x;
 
         return result;
+    }
+
+    private int to1D_Particle(int3 pos)
+    {
+        int3 particleResolution = latticeResolution + new int3(1, 1, 1);
+        return (pos.z * particleResolution.x * particleResolution.y) + (pos.y * particleResolution.x) + pos.x;
+    }
+
+    private void ActivateCell(int cellID)
+    {
+        if (latticeCells[cellID] != -1) return;
+        latticeCells[cellID] = activeCells.Count;
+        activeCells.Add(cellID);
+
+        // Add each cell corner particle
+        int3 baseCorner = to3D(cellID);
+
+        // 0: (0,0,0)
+        int3 currentCorner = baseCorner;
+        ActivateParticle(currentCorner);
+
+        // 1: (1,0,0)
+        currentCorner = baseCorner + new int3(1, 0, 0);
+        ActivateParticle(currentCorner);
+
+        // 2: (0,1,0)
+        currentCorner = baseCorner + new int3(0, 1, 0);
+        ActivateParticle(currentCorner);
+
+        // 3: (1,1,0)
+        currentCorner = baseCorner + new int3(1, 1, 0);
+        ActivateParticle(currentCorner);
+
+        // 4: (0,0,1)
+        currentCorner = baseCorner + new int3(0, 0, 1);
+        ActivateParticle(currentCorner);
+
+        // 5: (1,0,1)
+        currentCorner = baseCorner + new int3(1, 0, 1);
+        ActivateParticle(currentCorner);
+
+        // 6: (0,1,1)
+        currentCorner = baseCorner + new int3(0, 1, 1);
+        ActivateParticle(currentCorner);
+
+        // 7: (1,1,1)
+        currentCorner = baseCorner + new int3(1, 1, 1);
+        ActivateParticle(currentCorner);
+    }
+
+    private void ActivateParticle(int3 currentCorner)
+    {
+        if (particlesIdx[to1D_Particle(currentCorner)] == -1)
+        {
+            particlesIdx[to1D_Particle(currentCorner)] = activeParticles.Count;
+            activeParticles.Add(latticeNegativeCorner + latticeDimensions * currentCorner);
+        }
     }
 #endregion
 }

@@ -234,4 +234,49 @@ public static class MeshMath
             }
         }
     }
+
+    public static List<int3> BuildCellSortedEdges(List<int4> triangles)
+    {
+        if (triangles == null) throw new ArgumentNullException(nameof(triangles));
+
+        var edges = new List<int3>(triangles.Count * 2);
+
+        int i = 0;
+        int triCount = triangles.Count;
+
+        // hash used only per cell
+        var set = new HashSet<int2>();
+
+        while (i < triCount)
+        {
+            int cellId = triangles[i].w;
+
+            while (i < triCount && triangles[i].w == cellId)
+            {
+                int4 t = triangles[i];
+
+                AddEdge(set, t.x, t.y);
+                AddEdge(set, t.y, t.z);
+                AddEdge(set, t.z, t.x);
+
+                i++;
+            }
+
+            // Emit unique edges for this cell
+            foreach (var e in set)
+            {
+                edges.Add(new int3(e.x, e.y, cellId));
+            }
+            set.Clear();
+        }
+
+        return edges;
+    }
+
+    static void AddEdge(HashSet<int2> set, int v0, int v1)
+    {
+        if (v0 == v1) return;
+        if (v1 < v0) (v0, v1) = (v1, v0); // Swap to be in ascending order
+        set.Add(new int2(v0, v1));
+    }
 }

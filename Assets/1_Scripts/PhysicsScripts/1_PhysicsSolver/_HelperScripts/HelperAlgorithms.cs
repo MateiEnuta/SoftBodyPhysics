@@ -1,8 +1,35 @@
+using System.Collections.Generic;
 using Unity.Mathematics;
 using UnityEngine;
 
 public static class HelperAlgorithms
 {
+    public static void SortVertsAndRemapTris(
+        List<int> keys,
+        List<float3> verts,
+        List<int4> tris)
+    {
+        int n = keys.Count;
+        if (n <= 1) return;
+
+        // 1) Copy to arrays
+        var keysArr  = keys.ToArray();
+        var vertsArr = verts.ToArray();
+        var trisArr  = tris.ToArray();
+
+        // 2) Use your existing array-based sort
+        SortVertsAndRemapTris(keysArr, vertsArr, trisArr);
+
+        // 3) Copy back into lists (in-place update)
+        keys.Clear();
+        verts.Clear();
+        tris.Clear();
+
+        keys.AddRange(keysArr);
+        verts.AddRange(vertsArr);
+        tris.AddRange(trisArr);
+    }
+
     // Sorts keys + verts by key (LSD radix base 256),
     // then remaps triangle vertex indices, then sorts triangles by .w.
     public static void SortVertsAndRemapTris(
