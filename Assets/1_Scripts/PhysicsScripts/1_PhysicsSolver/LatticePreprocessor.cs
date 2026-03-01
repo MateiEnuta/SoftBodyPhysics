@@ -49,14 +49,14 @@ public class LatticePreprocessor
     private int[] latticeCells;
     private List<int> activeCells;
     private int[] particles;
-    private int[] chlCount;
     // Persistent data
     public LatticeBody latticeBody { get; private set; }
     public float3 latticeNegativeCorner { get; private set; }
     public int3 latticeResolution { get; private set; }
     public float3 latticeDimensions { get; private set; }
-    public List<int>       activeParticles { get; private set; }
-    public LatticeCell[][] finalLatticeCells { get; private set; }
+    public List<int>     activeParticles { get; private set; }
+    public LatticeCell[] finalLatticeCells { get; private set; }
+    public int[]         chlCount { get; private set; }
 
     // --------------Collision data--------------
     // Helper data
@@ -338,7 +338,7 @@ public class LatticePreprocessor
 
             // Make a wraper that has this actice cell index
             collisionWrapers[currentColWraperCount++] = new CollisionWraper(
-                i,
+                currentCellID,  // Array index that would later be changed to final list
                 new int2(initialColVertCount, currentColVertCount - initialColVertCount),
                 new int2(initialColTriCount, currentColTriCount - initialColTriCount),
                 new int2(initialColEdgeCount, currentColEdgeCount - initialColEdgeCount)
@@ -354,6 +354,7 @@ public class LatticePreprocessor
     #endregion
     #region Visual Mesh Creator
         
+        // Cache and assign new final arrays
         Mesh visualMesh = latticeBody.visualMesh;
         Vector3[] meshVisualVertices = visualMesh.vertices;
         visualVertices = new DynamicVertex[meshVisualVertices.Length];
@@ -361,18 +362,22 @@ public class LatticePreprocessor
 
         for (int i = 0; i < meshVisualVertices.Length; i++)
         {
+            // Calculate the position in lattice
             float3 pointInLattice = (float3)meshVisualVertices[i] - latticeNegativeCorner;
             int3 cellCoords = (int3)(pointInLattice / latticeDimensions);
+            // Find an add new cell
             int cellID = to1D(cellCoords);
             AddCell(cellID);
 
+            // Create a dynamic vertex and a separate reference to the cell
             visualVertices[i] = GetCellDynamicVertex(cellID, (float3)meshVisualVertices[i]);
-            visualVerticesCells[i] = cellID;
+            visualVerticesCells[i] = cellID;  // Array index that would later be changed to final list
         }
 
     #endregion
     #region Inside Cell Fill
 
+        // Helper data types
         HashSet<int> edgeHits = new HashSet<int>();
         Queue<int> cellQueue = new Queue<int>();
 
@@ -431,12 +436,7 @@ public class LatticePreprocessor
     #region Finalisation
 
     // Create final cells
-    finalLatticeCells = new LatticeCell[8][];
-    for (int i = 0; i < 8; i++) 
-    {
-        finalLatticeCells[i] = new LatticeCell[chlCount[i]];
-        chlCount[i] = 0;
-    }
+    finalLatticeCells = new LatticeCell[activeCells.Count];
     for (int i = 0; i < activeCells.Count; i++)
     {
         LatticeCell newCell = new LatticeCell();
@@ -472,14 +472,19 @@ public class LatticePreprocessor
         newCell.v7 = particles[to1D_Particle(currentCorner)];
 
         // Assign the new cell
-        finalLatticeCells[chl][chlCount[chl]++] = newCell;
+        finalLatticeCells[i] = newCell;
     }
+
+    // Convert collision and visual cell refrences to point to the new list insted of the whole lattice
+    for (int i = 0; i < collisionWrapers.Length; i++) 
+        collisionWrapers[i].cellIdx = latticeCells[collisionWrapers[i].cellIdx];
+    for (int i = 0; i < visualVerticesCells.Length; i++)
+        visualVerticesCells[i] = latticeCells[visualVerticesCells[i]];
 
     // GC final helper data
     latticeCells = null;
     activeCells = null;
     particles = null;
-    chlCount = null;
 
     #endregion
     }
@@ -523,12 +528,17 @@ public class LatticePreprocessor
     {
         if (latticeCells[cellID] != -1) return;
         latticeCells[cellID] = activeCells.Count;
-        activeCells.Add(cellID);
         int3 baseCorner = to3D(cellID);
 
         // Determine cell channel
         int chl = baseCorner.x%2 + baseCorner.y%2 * 2 + baseCorner.z%2 * 4;
         chlCount[chl]++;
+        // Calculate the position using the previous channel counts
+        int newCellPos = 0;
+        for (int i = 0; i < chl; i++) newCellPos += chlCount[i];
+        activeCells.Insert(newCellPos, cellID);
+        // Go through each lattice cell after the newly inseted cell and increase the reference
+        for (int i = newCellPos + 1; i < activeCells.Count; i++) latticeCells[activeCells[i]]++;
 
         // Add each cell corner particle
         // 0: (0,0,0)
