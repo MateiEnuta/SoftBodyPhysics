@@ -3,9 +3,9 @@ using UnityEngine;
 public class LatticeBody : MonoBehaviour
 {
     public Mesh collisionMesh;
+    public float mass = 1;
 
     private PhysicsSolver physicsSolver;
-
     [HideInInspector] public Mesh visualMesh { get; private set; }
 
     private void Start()
@@ -13,6 +13,6 @@ public class LatticeBody : MonoBehaviour
         visualMesh = GetComponent<MeshFilter>().sharedMesh;
 
         physicsSolver = FindFirstObjectByType<PhysicsSolver>();
-        physicsSolver.latticePreprocessor.ProcessLatticeBody(this);
+        physicsSolver.ProcessLatticeBody(this);
     }
 }

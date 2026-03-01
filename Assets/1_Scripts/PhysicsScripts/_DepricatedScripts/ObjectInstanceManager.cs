@@ -336,7 +336,7 @@ public class ObjectInstanceManager : MonoBehaviour
     }
 
     public void UpdateMesh(NativeList<float3> vertices, int verticesStart, 
-        NativeList<Particle> particles, int particleStart, int particleCount)
+        NativeList<old_Particle> particles, int particleStart, int particleCount)
     {
         Vector3 centerPos = Vector3.zero;
         for (int i = particleStart; i < particleStart + particleCount; i++)

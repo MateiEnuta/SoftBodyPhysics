@@ -36,25 +36,27 @@ public class LatticePreprocessor
 {
     static readonly int4[] s_CellTets = new[]
     {
-        new int4(0, 1, 3, 7),
-        new int4(0, 3, 2, 7),
-        new int4(0, 2, 6, 7),
-        new int4(0, 6, 4, 7),
-        new int4(0, 4, 5, 7),
+        new int4(0, 3, 6, 5),       // new int4(0, 1, 3, 7),
+        new int4(0, 5, 6, 4),       // new int4(0, 3, 2, 7),
+        new int4(0, 6, 3, 2),       // new int4(0, 2, 6, 7),
+        new int4(5, 3, 6, 7),       // new int4(0, 6, 4, 7),
+        new int4(0, 3, 5, 1)        // new int4(0, 4, 5, 7),
+                                    // new int4(0, 5, 1, 7)
     };
-
-    public float3 targetLatticeDimensions = new float3(1,1,1);
 
     // --------------Lattice data--------------
     // Helper data
     private int[] latticeCells;
     private List<int> activeCells;
     private int[] particles;
+    private int[] chlCount;
     // Persistent data
-    private float3 latticeNegativeCorner;
-    private int3 latticeResolution;
-    private float3 latticeDimensions;
-    private List<int> activeParticles;
+    public LatticeBody latticeBody { get; private set; }
+    public float3 latticeNegativeCorner { get; private set; }
+    public int3 latticeResolution { get; private set; }
+    public float3 latticeDimensions { get; private set; }
+    public List<int>       activeParticles { get; private set; }
+    public LatticeCell[][] finalLatticeCells { get; private set; }
 
     // --------------Collision data--------------
     // Helper data
@@ -66,17 +68,21 @@ public class LatticePreprocessor
     private int totalColTriangles;
     private int totalColEdges;
     // Persistent data
-    private DynamicVertex[] collisionVertices;
-    private int3[]            collisionTriangles;
-    private int2[]            collisionEdges;
-    private CollisionWraper[] collisionWrapers;
+    public DynamicVertex[]   collisionVertices { get; private set; }
+    public int3[]            collisionTriangles { get; private set; }
+    public int2[]            collisionEdges { get; private set; }
+    public CollisionWraper[] collisionWrapers { get; private set; }
 
     // --------------Visual data--------------
+    // Persistent data
+    public DynamicVertex[] visualVertices { get; private set; }
+    public int[]           visualVerticesCells { get; private set; }
 
-    public void ProcessLatticeBody(LatticeBody latticeBody)
+    public LatticePreprocessor(LatticeBody latticeBody, float3 targetLatticeDimensions)
     {
     #region Setup
         if (latticeBody.visualMesh == null) return;
+        this.latticeBody = latticeBody;
 
         // Calculate the lattice parameters
         Bounds visualMeshBounds = latticeBody.visualMesh.bounds;
@@ -110,6 +116,8 @@ public class LatticePreprocessor
         latticeCells = new int[maxNumberOfCells];
         for (int i = 0; i < maxNumberOfCells; i++) latticeCells[i] = -1;
         activeCells = new List<int>(maxNumberOfCells / 2);
+        chlCount = new int[8];
+        for (int i = 0; i < 8; i++) chlCount[i] = 0;
         // Collision data used pre cell
         cellColParticlesIdx = new Dictionary<Vec3Key, int>[maxNumberOfCells];
         cellColParticles = new List<float3>[maxNumberOfCells];
@@ -346,6 +354,133 @@ public class LatticePreprocessor
     #endregion
     #region Visual Mesh Creator
         
+        Mesh visualMesh = latticeBody.visualMesh;
+        Vector3[] meshVisualVertices = visualMesh.vertices;
+        visualVertices = new DynamicVertex[meshVisualVertices.Length];
+        visualVerticesCells = new int[meshVisualVertices.Length];
+
+        for (int i = 0; i < meshVisualVertices.Length; i++)
+        {
+            float3 pointInLattice = (float3)meshVisualVertices[i] - latticeNegativeCorner;
+            int3 cellCoords = (int3)(pointInLattice / latticeDimensions);
+            int cellID = to1D(cellCoords);
+            AddCell(cellID);
+
+            visualVertices[i] = GetCellDynamicVertex(cellID, (float3)meshVisualVertices[i]);
+            visualVerticesCells[i] = cellID;
+        }
+
+    #endregion
+    #region Inside Cell Fill
+
+        HashSet<int> edgeHits = new HashSet<int>();
+        Queue<int> cellQueue = new Queue<int>();
+
+        // Marks every lattice cell as either air or filled
+        void FloodFill(bool isOutside)
+        {
+            while (cellQueue.Count != 0)
+            {
+                // Get current cell and mark it as active or air
+                int cellID = cellQueue.Dequeue();
+                int3 cellCoords = to3D(cellID);
+                if (isOutside) latticeCells[cellID] = -2;
+                else AddCell(cellID);
+
+                // Manually add each adjacent cell and verify if it's inside the array
+                // +X
+                int adjCellID = to1D(cellCoords + new int3(1, 0, 0));
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1) cellQueue.Enqueue(adjCellID);
+                // -X
+                adjCellID = to1D(cellCoords + new int3(-1, 0, 0));
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1) cellQueue.Enqueue(adjCellID);
+                // +Z
+                adjCellID = to1D(cellCoords + new int3(0, 0, 1));
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1) cellQueue.Enqueue(adjCellID);
+                // -Z
+                adjCellID = to1D(cellCoords + new int3(0, 0, -1));
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1) cellQueue.Enqueue(adjCellID);
+                // +Y
+                adjCellID = to1D(cellCoords + new int3(0, 1, 0));
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1) cellQueue.Enqueue(adjCellID);
+                // -Y
+                adjCellID = to1D(cellCoords + new int3(0, -1, 0));
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1) cellQueue.Enqueue(adjCellID);
+            }
+        }
+
+        // Loops though each cell and if it's still initialised (-1)
+        // Add it to the queue and check if it's inside or outside the collision mesh
+        for (int i = 0; i < maxNumberOfCells; i++)
+        {
+            if (latticeCells[i] != -1) continue;
+
+            // Calculate cell middle and add it to the queue
+            int3 cellCoords = to3D(i);
+            float3 cellNegativeCorner = latticeNegativeCorner + cellCoords * latticeDimensions;
+            float3 cellMiddle = cellNegativeCorner + 0.5f * latticeDimensions;
+            cellQueue.Enqueue(i);
+
+            // Check if it's outside or inside the collision mesh
+            if (MeshMath.IsPointInsideMesh(cellMiddle, edgeHits, meshCollisionVertices, meshCollisionTriangles))
+                FloodFill(false);
+            else FloodFill(true);
+        }
+
+    #endregion
+    #region Finalisation
+
+    // Create final cells
+    finalLatticeCells = new LatticeCell[8][];
+    for (int i = 0; i < 8; i++) 
+    {
+        finalLatticeCells[i] = new LatticeCell[chlCount[i]];
+        chlCount[i] = 0;
+    }
+    for (int i = 0; i < activeCells.Count; i++)
+    {
+        LatticeCell newCell = new LatticeCell();
+
+        int3 baseCorner = to3D(activeCells[i]);
+        // Determine cell channel
+        int chl = baseCorner.x%2 + baseCorner.y%2 * 2 + baseCorner.z%2 * 4;
+
+        // Add each cell corner particle
+        // 0: (0,0,0)
+        int3 currentCorner = baseCorner;
+        newCell.v0 = particles[to1D_Particle(currentCorner)];
+        // 1: (1,0,0)
+        currentCorner = baseCorner + new int3(1, 0, 0);
+        newCell.v1 = particles[to1D_Particle(currentCorner)];
+        // 2: (0,1,0)
+        currentCorner = baseCorner + new int3(0, 1, 0);
+        newCell.v2 = particles[to1D_Particle(currentCorner)];
+        // 3: (1,1,0)
+        currentCorner = baseCorner + new int3(1, 1, 0);
+        newCell.v3 = particles[to1D_Particle(currentCorner)];
+        // 4: (0,0,1)
+        currentCorner = baseCorner + new int3(0, 0, 1);
+        newCell.v4 = particles[to1D_Particle(currentCorner)];
+        // 5: (1,0,1)
+        currentCorner = baseCorner + new int3(1, 0, 1);
+        newCell.v5 = particles[to1D_Particle(currentCorner)];
+        // 6: (0,1,1)
+        currentCorner = baseCorner + new int3(0, 1, 1);
+        newCell.v6 = particles[to1D_Particle(currentCorner)];
+        // 7: (1,1,1)
+        currentCorner = baseCorner + new int3(1, 1, 1);
+        newCell.v7 = particles[to1D_Particle(currentCorner)];
+
+        // Assign the new cell
+        finalLatticeCells[chl][chlCount[chl]++] = newCell;
+    }
+
+    // GC final helper data
+    latticeCells = null;
+    activeCells = null;
+    particles = null;
+    chlCount = null;
+
     #endregion
     }
 
@@ -389,38 +524,34 @@ public class LatticePreprocessor
         if (latticeCells[cellID] != -1) return;
         latticeCells[cellID] = activeCells.Count;
         activeCells.Add(cellID);
-
-        // Add each cell corner particle
         int3 baseCorner = to3D(cellID);
 
+        // Determine cell channel
+        int chl = baseCorner.x%2 + baseCorner.y%2 * 2 + baseCorner.z%2 * 4;
+        chlCount[chl]++;
+
+        // Add each cell corner particle
         // 0: (0,0,0)
         int3 currentCorner = baseCorner;
         ActivateParticle(currentCorner);
-
         // 1: (1,0,0)
         currentCorner = baseCorner + new int3(1, 0, 0);
         ActivateParticle(currentCorner);
-
         // 2: (0,1,0)
         currentCorner = baseCorner + new int3(0, 1, 0);
         ActivateParticle(currentCorner);
-
         // 3: (1,1,0)
         currentCorner = baseCorner + new int3(1, 1, 0);
         ActivateParticle(currentCorner);
-
         // 4: (0,0,1)
         currentCorner = baseCorner + new int3(0, 0, 1);
         ActivateParticle(currentCorner);
-
         // 5: (1,0,1)
         currentCorner = baseCorner + new int3(1, 0, 1);
         ActivateParticle(currentCorner);
-
         // 6: (0,1,1)
         currentCorner = baseCorner + new int3(0, 1, 1);
         ActivateParticle(currentCorner);
-
         // 7: (1,1,1)
         currentCorner = baseCorner + new int3(1, 1, 1);
         ActivateParticle(currentCorner);
@@ -440,49 +571,52 @@ public class LatticePreprocessor
     {
         int3 baseCorner = to3D(cellID);
         float3 cellOrigin = latticeNegativeCorner + (float3)baseCorner * latticeDimensions;
-        float3 p = vertexPos - cellOrigin;
+        // Normalize so the point is between 0 and 1 in all directions
+        float3 p = (vertexPos - cellOrigin) / latticeDimensions;
 
-        // Precompute corners as locals (no array alloc)
+        // Precompute unit cube corners (0/1)
         float3 c0 = new float3(0, 0, 0);
-        float3 c1 = new float3(latticeDimensions.x, 0, 0);
-        float3 c2 = new float3(0, latticeDimensions.y, 0);
-        float3 c3 = new float3(latticeDimensions.x, latticeDimensions.y, 0);
-        float3 c4 = new float3(0, 0, latticeDimensions.z);
-        float3 c5 = new float3(latticeDimensions.x, 0, latticeDimensions.z);
-        float3 c6 = new float3(0, latticeDimensions.y, latticeDimensions.z);
-        float3 c7 = new float3(latticeDimensions.x, latticeDimensions.y, latticeDimensions.z);
+        float3 c1 = new float3(1, 0, 0);
+        float3 c2 = new float3(0, 1, 0);
+        float3 c3 = new float3(1, 1, 0);
+        float3 c4 = new float3(0, 0, 1);
+        float3 c5 = new float3(1, 0, 1);
+        float3 c6 = new float3(0, 1, 1);
+        float3 c7 = new float3(1, 1, 1);
 
-        const float eps = 1e-6f;
+        float3 GetCorner(int idx) =>
+            idx == 0 ? c0 :
+            idx == 1 ? c1 :
+            idx == 2 ? c2 :
+            idx == 3 ? c3 :
+            idx == 4 ? c4 :
+            idx == 5 ? c5 :
+            idx == 6 ? c6 : c7;
 
-        // Simple function for getting the cached corners
-        float3 GetParticle(int idx)
-        {
-            return idx == 0 ? c0 :
-                   idx == 1 ? c1 :
-                   idx == 2 ? c2 :
-                   idx == 3 ? c3 :
-                   idx == 4 ? c4 :
-                   idx == 5 ? c5 :
-                   idx == 6 ? c6 : c7;
-        }
+        const float eps = 1e-5f;
 
-        // Loop though each tetra and try to find a match for the given vertex
         for (byte tetIndex = 0; tetIndex < s_CellTets.Length; tetIndex++)
         {
             int4 t = s_CellTets[tetIndex];
 
-            float3 a = GetParticle(t.x);
-            float3 b = GetParticle(t.y);
-            float3 c = GetParticle(t.z);
-            float3 d = GetParticle(t.w);
+            float3 a = GetCorner(t.x);
+            float3 b = GetCorner(t.y);
+            float3 c = GetCorner(t.z);
+            float3 d = GetCorner(t.w);
 
+            // p = a*λ0 + b*λ1 + c*λ2 + d*λ3, λ0+λ1+λ2+λ3=1
+            // => p - d = (a-d)*λ0 + (b-d)*λ1 + (c-d)*λ2
             float3 e0 = a - d;
             float3 e1 = b - d;
             float3 e2 = c - d;
             float3 r  = p - d;
 
             float3x3 M = new float3x3(e0, e1, e2);
-            float3 lambda012 = math.mul(math.inverse(M), r);
+            float det = math.determinant(M);
+            if (math.abs(det) < 1e-8f)
+                continue; // degenerate, skip
+
+            float3 lambda012 = math.mul(math.inverse(M), r); // fine for 5 tets per cell
             float lambda3 = 1f - (lambda012.x + lambda012.y + lambda012.z);
             float4 bary = new float4(lambda012, lambda3);
 

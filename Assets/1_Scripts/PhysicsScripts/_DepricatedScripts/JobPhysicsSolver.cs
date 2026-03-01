@@ -17,12 +17,12 @@ public struct PositionUpdate : IJobParallelFor
 {
     [ReadOnly] public float3 gravity;
     [ReadOnly] public float dt;
-    public NativeArray<Particle> particles;
+    public NativeArray<old_Particle> particles;
 
     public void Execute(int index)
     {
         // Read particle
-        Particle currentParticle = particles[index];
+        old_Particle currentParticle = particles[index];
 
         // Semi-implicit Euler: update velocity first
         float3 velocity = (currentParticle.position - currentParticle.previousPosition) / dt;
@@ -47,7 +47,7 @@ public struct PositionUpdate : IJobParallelFor
 [BurstCompile]
 public struct VisualVerticesUpdate : IJobParallelFor
 {
-    [ReadOnly] public NativeArray<Particle> particles;
+    [ReadOnly] public NativeArray<old_Particle> particles;
     [ReadOnly] public NativeArray<old_VisualVertex> visualVerticesBary;
     public NativeArray<float3> verticesPositions;
 
@@ -83,7 +83,7 @@ public struct DistanceConstraintsUpdate : IJobParallelFor
     [NativeDisableParallelForRestriction] public NativeArray<DistanceConstraint> distanceConstraints;
 
     // Particle array (writes allowed)
-    [NativeDisableParallelForRestriction] public NativeArray<Particle> particles;
+    [NativeDisableParallelForRestriction] public NativeArray<old_Particle> particles;
 
     public void Execute(int index)
     {
@@ -96,8 +96,8 @@ public struct DistanceConstraintsUpdate : IJobParallelFor
             DistanceConstraint constraint = distanceConstraints[i];
 
             // Load particle data
-            Particle p1 = particles[constraint.particlesIdx.x];
-            Particle p2 = particles[constraint.particlesIdx.y];
+            old_Particle p1 = particles[constraint.particlesIdx.x];
+            old_Particle p2 = particles[constraint.particlesIdx.y];
 
             float3 dir = p2.position - p1.position;
             float currentLength = math.length(dir);
@@ -165,7 +165,7 @@ public struct VolumeConstraintsUpdate : IJobParallelFor
     [ReadOnly] public float damping;
 
     [NativeDisableParallelForRestriction] public NativeArray<VolumeConstraint> volumeConstraints;
-    [NativeDisableParallelForRestriction] public NativeArray<Particle> particles;
+    [NativeDisableParallelForRestriction] public NativeArray<old_Particle> particles;
 
     public void Execute(int index)
     {
@@ -175,10 +175,10 @@ public struct VolumeConstraintsUpdate : IJobParallelFor
             VolumeConstraint constraint = volumeConstraints[i];
 
             // Load tetra particles
-            Particle p1 = particles[constraint.particlesIdx.x];
-            Particle p2 = particles[constraint.particlesIdx.y];
-            Particle p3 = particles[constraint.particlesIdx.z];
-            Particle p4 = particles[constraint.particlesIdx.w];
+            old_Particle p1 = particles[constraint.particlesIdx.x];
+            old_Particle p2 = particles[constraint.particlesIdx.y];
+            old_Particle p3 = particles[constraint.particlesIdx.z];
+            old_Particle p4 = particles[constraint.particlesIdx.w];
 
             // Compute signed volume
             float3 v1 = p2.position - p1.position;
@@ -260,7 +260,7 @@ public struct VolumeConstraintsUpdate : IJobParallelFor
 public struct PointTriCollision : IJob
 {
     // Dynamic bodies
-    public NativeArray<Particle> particles;
+    public NativeArray<old_Particle> particles;
     [ReadOnly] public NativeArray<old_CollisionVertex> collisionVertices;
     [ReadOnly] public NativeArray<int3> collisionTriangles;
     [ReadOnly] public NativeArray<int2> collisionEdges;
@@ -566,19 +566,19 @@ public struct PointTriCollision : IJob
         correction /= denom;
         
         // Update actual particles positions
-        Particle p0 = particles[i0];
+        old_Particle p0 = particles[i0];
         p0.position += b.x * correction;
         particles[i0] = p0;
 
-        Particle p1 = particles[i1];
+        old_Particle p1 = particles[i1];
         p1.position += b.y * correction;
         particles[i1] = p1;
 
-        Particle p2 = particles[i2];
+        old_Particle p2 = particles[i2];
         p2.position += b.z * correction;
         particles[i2] = p2;
 
-        Particle p3 = particles[i3];
+        old_Particle p3 = particles[i3];
         p3.position += b.w * correction;
         particles[i3] = p3;
     }
@@ -802,12 +802,12 @@ public struct SoftBodyData
 }
 
 // Particle data
-public struct Particle
+public struct old_Particle
 {
     public float3 position, previousPosition;
     public float invMass;
 
-    public Particle(float3 position, float invMass)
+    public old_Particle(float3 position, float invMass)
     {
         this.position = position;
         this.invMass = invMass;
@@ -857,7 +857,7 @@ public class JobPhysicsSolver : MonoBehaviour
     private List<SoftBodyData> softBodies;
 
     // Particles data
-    private NativeList<Particle> particles;
+    private NativeList<old_Particle> particles;
 
     // Mesh vertices data
     private NativeList<float3> viualVerticesPos;
@@ -1049,7 +1049,7 @@ public class JobPhysicsSolver : MonoBehaviour
         softBodies.Add(new SoftBodyData(objectManager, verticesOffset, particlesOffset, bodyParticles.Count));
 
         for (int i = 0; i < bodyParticles.Count; i++)
-            particles.Add(new Particle(bodyParticles[i], 1f / particleMasses[i]));
+            particles.Add(new old_Particle(bodyParticles[i], 1f / particleMasses[i]));
         
 
         // Add empty vertex entries + trilinear mapping
@@ -1135,7 +1135,7 @@ public class JobPhysicsSolver : MonoBehaviour
         softBodies = new List<SoftBodyData>();
 
         // Main particle storage
-        particles = new NativeList<Particle>(Allocator.Persistent);
+        particles = new NativeList<old_Particle>(Allocator.Persistent);
 
         // Storage for mesh vertices & their lattice mapping
         viualVerticesPos = new NativeList<float3>(Allocator.Persistent);
