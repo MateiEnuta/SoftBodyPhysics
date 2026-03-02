@@ -35,7 +35,8 @@ public class PhysicsSolver : MonoBehaviour
     private NativeList<int>           visualVerticesCells;
 
 
-    private int[] initialChlCount = new int[8]; 
+#region Initialisation
+
     public void ProcessLatticeBody(LatticeBody latticeBody)
     {
         InitialiseSolver();
@@ -50,7 +51,6 @@ public class PhysicsSolver : MonoBehaviour
         int initialColEdgeCount = collisionEdges.Length;
         int initialColWraperCount = collisionWrapers.Length;
         int initialVisVerticesCount = visualVertices.Length;
-        for (int i = 0; i < 8; i++) initialChlCount[i] = currentProcess.chlCount[i];
 
 
         // Add particles
@@ -234,4 +234,72 @@ public class PhysicsSolver : MonoBehaviour
     {
         DisposeLists();
     }
+
+#endregion
+
+#region Debugging
+
+    // 8 fixed colors for parity channels
+    static readonly Color[] s_ChannelColors =
+    {
+        Color.red,
+        Color.green,
+        Color.blue,
+        Color.yellow,
+        Color.cyan,
+        Color.magenta,
+        new Color(1f, 0.5f, 0f),   // orange
+        Color.white
+    };
+
+    private void OnDrawGizmos()
+    {
+        if (!Application.isPlaying) return;
+        if (!particles.IsCreated || !latticeCells.IsCreated) return;
+
+        for (int i = 0; i < latticeCells.Length; i++)
+        {
+            LatticeCell cell = latticeCells[i];
+            int totalCount = 0;
+            int channel = 0;
+            for (channel = 0; channel < 8; channel++) 
+            {
+                totalCount += globalChlCount[channel];
+                if (i < totalCount) break;
+            }
+
+            Gizmos.color = s_ChannelColors[channel];
+
+            // Get corner positions
+            float3 p0 = particles[cell.v0].currentPosition;
+            float3 p1 = particles[cell.v1].currentPosition;
+            float3 p2 = particles[cell.v2].currentPosition;
+            float3 p3 = particles[cell.v3].currentPosition;
+            float3 p4 = particles[cell.v4].currentPosition;
+            float3 p5 = particles[cell.v5].currentPosition;
+            float3 p6 = particles[cell.v6].currentPosition;
+            float3 p7 = particles[cell.v7].currentPosition;
+
+            // Draw cube edges (12 edges)
+            // bottom square
+            Gizmos.DrawLine(p0, p1);
+            Gizmos.DrawLine(p1, p3);
+            Gizmos.DrawLine(p3, p2);
+            Gizmos.DrawLine(p2, p0);
+
+            // top square
+            Gizmos.DrawLine(p4, p5);
+            Gizmos.DrawLine(p5, p7);
+            Gizmos.DrawLine(p7, p6);
+            Gizmos.DrawLine(p6, p4);
+
+            // vertical edges
+            Gizmos.DrawLine(p0, p4);
+            Gizmos.DrawLine(p1, p5);
+            Gizmos.DrawLine(p2, p6);
+            Gizmos.DrawLine(p3, p7);
+        }
+    }
+
+#endregion
 }

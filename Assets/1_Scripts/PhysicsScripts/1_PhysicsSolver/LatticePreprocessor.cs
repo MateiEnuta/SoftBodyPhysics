@@ -86,26 +86,27 @@ public class LatticePreprocessor
         if (latticeBody.visualMesh == null) return;
         this.latticeBody = latticeBody;
 
-        // Calculate the lattice parameters
+        // 1) World-space bounds
         Bounds visualMeshBounds = latticeBody.visualMesh.bounds;
-        // enlarge the bounds to avoid precision errors
         float EPSILON = 1e-4f;
-        float3 boundsSize = (float3)visualMeshBounds.size + new float3(2 * EPSILON, 2 * EPSILON, 2 * EPSILON);
-        latticeNegativeCorner = (float3)visualMeshBounds.min - new float3(EPSILON, EPSILON, EPSILON);
-        float3 localTargetDimensions = latticeBody.transform.InverseTransformDirection(targetLatticeDimensions);
 
-        // Prevent division by zero
-        Vector3 safeTarget = new Vector3(
-            Mathf.Max(localTargetDimensions.x, 0.1f),
-            Mathf.Max(localTargetDimensions.y, 0.1f),
-            Mathf.Max(localTargetDimensions.z, 0.1f));
+        float3 boundsSize = (float3)visualMeshBounds.size
+                            + new float3(2 * EPSILON, 2 * EPSILON, 2 * EPSILON);
+        latticeNegativeCorner = (float3)visualMeshBounds.min
+                                - new float3(EPSILON, EPSILON, EPSILON);
 
-        // Closest integer count per axis
-        int nx = Mathf.Max(1, Mathf.RoundToInt(boundsSize.x / safeTarget.x));
-        int ny = Mathf.Max(1, Mathf.RoundToInt(boundsSize.y / safeTarget.y));
-        int nz = Mathf.Max(1, Mathf.RoundToInt(boundsSize.z / safeTarget.z));
+        float3 localTargetDimensions = targetLatticeDimensions / latticeBody.transform.lossyScale;
+        float3 safeTarget = new float3(
+            math.max(localTargetDimensions.x, 0.01f),
+            math.max(localTargetDimensions.y, 0.01f),
+            math.max(localTargetDimensions.z, 0.01f));
 
-        // Assign final lattice data
+        // 2) Compute integer cell counts in world space
+        int nx = math.max(1, (int)math.round(boundsSize.x / safeTarget.x));
+        int ny = math.max(1, (int)math.round(boundsSize.y / safeTarget.y));
+        int nz = math.max(1, (int)math.round(boundsSize.z / safeTarget.z));
+
+        // 3) Final lattice data (world-space cell size)
         latticeResolution = new int3(nx, ny, nz);
         latticeDimensions = new float3(
             boundsSize.x / nx,
@@ -179,31 +180,34 @@ public class LatticePreprocessor
             int3 maxNegativeCorner = (int3)(maxPosInLattice / latticeDimensions);
 
         #region Cell Cutter
-            // Loop though each cell touched by the triangle bounding box
-            // And cut the triangle for each on of them
             static void TryCutEdge(float3[] slicedEdges, ref int currentEdgeIdx,
                 float3 v0, float3 v1,  float planeValueBack,  float planeValueFront, int axis)
             {
                 // Tries to first add the current vertex then the cut edge if it exists
-                if (v0[axis] - planeValueBack > -1e-06f &&
-                    v0[axis] - planeValueFront < 1e-06f) slicedEdges[currentEdgeIdx++] = v0;
+                float v0Val = v0[axis];
+                bool firstWasAdded = false;
+                if (v0Val >= planeValueBack - 1e-06f && v0Val <= planeValueFront + 1e-06f) 
+                    { slicedEdges[currentEdgeIdx++] = v0; firstWasAdded = true; }
                 // Test for plane intersections
                 float3 edgeDir = v1 - v0;
-                if (edgeDir[axis] != 0)
+                if (math.abs(edgeDir[axis]) > 1e-06f)
                 {
                     float t1 = (planeValueBack - v0[axis]) / edgeDir[axis];
                     float t2 = (planeValueFront - v0[axis]) / edgeDir[axis];
 
                     // Swap to preserve clock wise orientation
                     if (t2 < t1) (t2, t1) = (t1, t2);
+                    if (firstWasAdded && t2 < 1e-04f) return;
 
                     // Add them only if they are exactly between planes
-                    if (t1 > 1e-06f && t1 - 1 < 1e-06f) 
+                    if (t1 > 1e-06f && t1 < 1f - 1e-06f && !firstWasAdded)
                         slicedEdges[currentEdgeIdx++] = v0 + t1 * edgeDir;
-                    if (t2 > 1e-06f && t2 - 1 < 1e-06f) 
+                    if (t2 > 1e-06f && t2 < 1f - 1e-06f)
                         slicedEdges[currentEdgeIdx++] = v0 + t2 * edgeDir;
                 }
             }
+            // Loop though each cell touched by the triangle bounding box
+            // And cut the triangle for each on of them
             for (int x = minNegativeCorner.x; x <= maxNegativeCorner.x; x++)
             {
                 float xPlaneValueBack = latticeNegativeCorner.x + latticeDimensions.x * x;
@@ -444,8 +448,6 @@ public class LatticePreprocessor
         LatticeCell newCell = new LatticeCell();
 
         int3 baseCorner = to3D(activeCells[i]);
-        // Determine cell channel
-        int chl = baseCorner.x%2 + baseCorner.y%2 * 2 + baseCorner.z%2 * 4;
 
         // Add each cell corner particle
         // 0: (0,0,0)
@@ -485,13 +487,13 @@ public class LatticePreprocessor
     // Convert collision and visual cell refrences to point to the new list insted of the whole lattice
     for (int i = 0; i < collisionWrapers.Length; i++)
     {
-        cellToColCell[collisionWrapers[i].cellIdx] = i;
         collisionWrapers[i].cellIdx = latticeCells[collisionWrapers[i].cellIdx];
+        cellToColCell[collisionWrapers[i].cellIdx] = i;
     }
     for (int i = 0; i < visualVerticesCells.Length; i++)
     {
+        visualVerticesCells[i] = latticeCells[visualVerticesCells[i]];
         cellToVisCell[visualVerticesCells[i]] = i;
-        visualVerticesCells[i] = latticeCells[visualVerticesCells[i]];   
     }
 
     // GC final helper data
