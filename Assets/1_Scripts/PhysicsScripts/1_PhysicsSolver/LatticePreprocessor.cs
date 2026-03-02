@@ -61,14 +61,6 @@ public class LatticePreprocessor
     public int[]         cellToVisCell { get; private set; }
 
     // --------------Collision data--------------
-    // Helper data
-    private Dictionary<Vec3Key, int>[] cellColParticlesIdx;
-    private List<float3>[]             cellColParticles;
-    private List<int3>[]               cellColTriangles;
-    private HashSet<int2>[]            cellColEdges;
-    private int totalColParticles;
-    private int totalColTriangles;
-    private int totalColEdges;
     // Persistent data
     public DynamicVertex[]   collisionVertices { get; private set; }
     public int3[]            collisionTriangles { get; private set; }
@@ -97,17 +89,18 @@ public class LatticePreprocessor
 
         float3 localTargetDimensions = targetLatticeDimensions / latticeBody.transform.lossyScale;
         float3 safeTarget = new float3(
-            math.max(localTargetDimensions.x, 0.01f),
-            math.max(localTargetDimensions.y, 0.01f),
-            math.max(localTargetDimensions.z, 0.01f));
+            math.max(localTargetDimensions.x, 0.001f),
+            math.max(localTargetDimensions.y, 0.001f),
+            math.max(localTargetDimensions.z, 0.001f));
 
         // 2) Compute integer cell counts in world space
-        int nx = math.max(1, (int)math.round(boundsSize.x / safeTarget.x));
-        int ny = math.max(1, (int)math.round(boundsSize.y / safeTarget.y));
-        int nz = math.max(1, (int)math.round(boundsSize.z / safeTarget.z));
+        int nx = math.clamp((int)math.round(boundsSize.x / safeTarget.x), 1, 40);
+        int ny = math.clamp((int)math.round(boundsSize.y / safeTarget.y), 1, 40);
+        int nz = math.clamp((int)math.round(boundsSize.z / safeTarget.z), 1, 40);
 
         // 3) Final lattice data (world-space cell size)
         latticeResolution = new int3(nx, ny, nz);
+        Debug.Log(latticeResolution);
         latticeDimensions = new float3(
             boundsSize.x / nx,
             boundsSize.y / ny,
@@ -121,14 +114,6 @@ public class LatticePreprocessor
         activeCells = new List<int>(maxNumberOfCells / 2);
         chlCount = new int[8];
         for (int i = 0; i < 8; i++) chlCount[i] = 0;
-        // Collision data used pre cell
-        cellColParticlesIdx = new Dictionary<Vec3Key, int>[maxNumberOfCells];
-        cellColParticles = new List<float3>[maxNumberOfCells];
-        cellColTriangles = new List<int3>[maxNumberOfCells];
-        cellColEdges = new HashSet<int2>[maxNumberOfCells];
-        totalColParticles = 0;
-        totalColTriangles = 0;
-        totalColEdges = 0;
         // Particle setup
         int maxNumberOfParticles = (latticeResolution.x + 1) * (latticeResolution.y + 1) * (latticeResolution.z + 1);
         particles = new int[maxNumberOfParticles];
@@ -144,6 +129,12 @@ public class LatticePreprocessor
         int[] meshCollisionTriangles = collisionMesh.triangles;
         // Make sure the collision mesh is as small as possible
         MeshMath.RemoveDuplicateVertices(ref meshCollisionVertices, ref meshCollisionTriangles, 1e-06f);
+
+        // Allocate helper hashes
+        List<float3>                    initialColVerts = new List<float3>();
+        Dictionary<(Vec3Key, int), int> initialColVertsRef = new Dictionary<(Vec3Key, int), int>();
+        List<int4>                      initialColTries = new List<int4>();
+        HashSet<int3>                   initialColEdges = new HashSet<int3>();
 
         // Pre allocate data for the mesh cutter
         float3[] xSliceEdges = new float3[5];
@@ -263,40 +254,29 @@ public class LatticePreprocessor
                         int3 cellCoords = new int3(x, y, z);
                         int cellID = to1D(cellCoords);
                         AddCell(cellID);
-                        if (cellColParticlesIdx[cellID] == null)
-                        {
-                            cellColParticlesIdx[cellID] = new Dictionary<Vec3Key, int>();
-                            cellColParticles[cellID] = new List<float3>();
-                            cellColTriangles[cellID] = new List<int3>();
-                            cellColEdges[cellID] = new HashSet<int2>();
-                        }
                         
                         // Add each particle individually
                         for (int i = 0; i < zSliceEdgesCount; i++)
                         {
-                            if (cellColParticlesIdx[cellID].TryAdd(new Vec3Key(zSliceEdges[i], 1e-06f), cellColParticles[cellID].Count))
-                            {
-                                totalColParticles++;
-                                cellColParticles[cellID].Add(zSliceEdges[i]);
-                            }
+                            initialColVertsRef.TryAdd((new Vec3Key(zSliceEdges[i], 1e-06f), cellID), initialColVerts.Count);
+                            initialColVerts.Add(zSliceEdges[i]);
                         }
 
                         // Cache the main vertex
-                        int v1 = cellColParticlesIdx[cellID][new Vec3Key(zSliceEdges[0], 1e-06f)];
+                        int v1 = initialColVertsRef[(new Vec3Key(zSliceEdges[0], 1e-06f), cellID)];
                         for (int i = 1; i < zSliceEdgesCount - 1; i++)
                         {
                             // Compute the next 2 vertices
-                            int v2 = cellColParticlesIdx[cellID][new Vec3Key(zSliceEdges[i], 1e-06f)];
-                            int v3 = cellColParticlesIdx[cellID][new Vec3Key(zSliceEdges[i+1], 1e-06f)];
+                            int v2 = initialColVertsRef[(new Vec3Key(zSliceEdges[i], 1e-06f), cellID)];
+                            int v3 = initialColVertsRef[(new Vec3Key(zSliceEdges[i + 1], 1e-06f), cellID)];
                             
                             // Add the triangle
-                            cellColTriangles[cellID].Add(new int3(v1, v2, v3));
-                            totalColTriangles++;
+                            initialColTries.Add(new int4(v1, v2, v3, cellID));
 
                             // Add the edges in ascending index order
-                            if (cellColEdges[cellID].Add(v1 < v2 ? new int2(v1, v2) : new int2(v2, v1))) totalColEdges++;
-                            if (cellColEdges[cellID].Add(v2 < v3 ? new int2(v2, v3) : new int2(v3, v2))) totalColEdges++;
-                            if (cellColEdges[cellID].Add(v3 < v1 ? new int2(v3, v1) : new int2(v1, v3))) totalColEdges++;
+                            initialColEdges.Add(v1 < v2 ? new int3(v1, v2, cellID) : new int3(v2, v1, cellID));
+                            initialColEdges.Add(v2 < v3 ? new int3(v2, v3, cellID) : new int3(v3, v2, cellID));
+                            initialColEdges.Add(v3 < v1 ? new int3(v3, v1, cellID) : new int3(v1, v3, cellID));
                         }
                     }
                 }
@@ -304,10 +284,23 @@ public class LatticePreprocessor
         #endregion
         }
 
+        // Translators used to retriece cell data fast
+        Dictionary<int2, float3> initialTranslatorColVerts = new Dictionary<int2, float3>(initialColVerts.Count);
+        Dictionary<int2, int3>   initialTranslatorColTries = new Dictionary<int2, int3>(initialColTries.Count);
+        Dictionary<int2, int2>   initialTranslatorColEdges = new Dictionary<int2, int2>(initialColEdges.Count);
+        int3[] cellStride = new int3[maxNumberOfCells];
+
+        foreach (KeyValuePair<(Vec3Key, int), int> colVert in initialColVertsRef)
+            initialTranslatorColVerts.Add(new int2(colVert.Key.Item2, cellStride[colVert.Key.Item2].x++), initialColVerts[colVert.Value]);
+        foreach (int4 tri in initialColTries)
+            initialTranslatorColTries.Add(new int2(tri.w, cellStride[tri.w].y++), tri.xyz);
+        foreach (int3 edge in initialColEdges)
+            initialTranslatorColEdges.Add(new int2(edge.z, cellStride[edge.z].z++), edge.xy);
+
         // Setup all permanent collision data
-        collisionVertices  = new DynamicVertex[totalColParticles];
-        collisionTriangles = new int3[totalColTriangles];
-        collisionEdges     = new int2[totalColEdges];
+        collisionVertices  = new DynamicVertex[initialColVerts.Count];
+        collisionTriangles = new int3[initialColTries.Count];
+        collisionEdges     = new int2[initialColEdges.Count];
         collisionWrapers   = new CollisionWraper[activeCells.Count];
 
         // For knowing at which element we are
@@ -319,43 +312,33 @@ public class LatticePreprocessor
         for (int i = 0; i < activeCells.Count; i++)
         {
             // Store the initial list count
-            int currentCellID = activeCells[i];
+            int cellID = activeCells[i];
             int initialColVertCount   = currentColVertCount;
             int initialColTriCount    = currentColTriCount;
             int initialColEdgeCount   = currentColEdgeCount;
 
             // Loop through each collision vertex and store a dynamic vertex
-            for (int j = 0; j < cellColParticles[currentCellID].Count; j++)
-            {
+            for (int j = 0; j < cellStride[cellID].x; j++)
                 collisionVertices[currentColVertCount++] = GetCellDynamicVertex(
-                    currentCellID, 
-                    cellColParticles[currentCellID][j]
+                    cellID, initialTranslatorColVerts[new int2(cellID, j)]
                 );
-            }
 
             // Store the triangles
-            for (int j = 0; j < cellColTriangles[currentCellID].Count; j++)
-            {
-                collisionTriangles[currentColTriCount++] = cellColTriangles[currentCellID][j];
-            }
+            for (int j = 0; j < cellStride[cellID].y; j++)
+                collisionTriangles[currentColTriCount++] = initialTranslatorColTries[new int2(cellID, j)];
 
             // Store the edges
-            foreach (int2 edge in cellColEdges[currentCellID]) collisionEdges[currentColEdgeCount++] = edge;
+            for (int j = 0; j < cellStride[cellID].z; j++)
+                collisionEdges[currentColEdgeCount++] = initialTranslatorColEdges[new int2(cellID, j)];
 
             // Make a wraper that has this actice cell index
             collisionWrapers[currentColWraperCount++] = new CollisionWraper(
-                currentCellID,  // Array index that would later be changed to final list
+                cellID,  // Array index that would later be changed to final list
                 new int2(initialColVertCount, currentColVertCount - initialColVertCount),
                 new int2(initialColTriCount, currentColTriCount - initialColTriCount),
                 new int2(initialColEdgeCount, currentColEdgeCount - initialColEdgeCount)
             );
         }
-
-        // GC helper data
-        cellColParticlesIdx = null;
-        cellColParticles = null;
-        cellColTriangles = null;
-        cellColEdges = null;
 
     #endregion
     #region Visual Mesh Creator
@@ -385,7 +368,7 @@ public class LatticePreprocessor
 
         // Helper data types
         HashSet<int> edgeHits = new HashSet<int>();
-        Queue<int> cellQueue = new Queue<int>();
+        Queue<int> cellQueue = new Queue<int>(1000);
 
         // Marks every lattice cell as either air or filled
         void FloodFill(bool isOutside)
@@ -401,22 +384,22 @@ public class LatticePreprocessor
                 // Manually add each adjacent cell and verify if it's inside the array
                 // +X
                 int adjCellID = to1D(cellCoords + new int3(1, 0, 0));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 1000) cellQueue.Enqueue(adjCellID);
                 // -X
                 adjCellID = to1D(cellCoords + new int3(-1, 0, 0));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 1000) cellQueue.Enqueue(adjCellID);
                 // +Z
                 adjCellID = to1D(cellCoords + new int3(0, 0, 1));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 1000) cellQueue.Enqueue(adjCellID);
                 // -Z
                 adjCellID = to1D(cellCoords + new int3(0, 0, -1));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 1000) cellQueue.Enqueue(adjCellID);
                 // +Y
                 adjCellID = to1D(cellCoords + new int3(0, 1, 0));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 1000) cellQueue.Enqueue(adjCellID);
                 // -Y
                 adjCellID = to1D(cellCoords + new int3(0, -1, 0));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 1000) cellQueue.Enqueue(adjCellID);
             }
         }
 
@@ -503,6 +486,7 @@ public class LatticePreprocessor
 
     #endregion
     }
+
 
 #region Common Helper Functions
     public int to1D(int3 pos)
