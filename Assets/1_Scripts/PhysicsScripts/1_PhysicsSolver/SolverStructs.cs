@@ -42,4 +42,24 @@ namespace SolverStructs
             this.colEdgesRange = colEdgesRange;
         }
     }
+
+    public struct BodyWraper
+    {
+        public LatticePreprocessor latticePreprocessor;
+        public int2 particlesRange;
+        public int2[] cellRanges;
+        public int2 colVertsRange;
+        public int2 colTrisRange;
+        public int2 colEdgesRange;
+        public int2 colWrapersRange;
+        public int2 visVerticesRange;
+
+        public BodyWraper(LatticePreprocessor latticePreprocessor)
+        {
+            this.latticePreprocessor = latticePreprocessor;
+            cellRanges = new int2[8];
+            particlesRange = colVertsRange = colTrisRange = 
+            colWrapersRange = colEdgesRange = visVerticesRange = int2.zero;
+        }
+    }
 }

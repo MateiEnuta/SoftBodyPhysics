@@ -57,6 +57,8 @@ public class LatticePreprocessor
     public List<int>     activeParticles { get; private set; }
     public LatticeCell[] finalLatticeCells { get; private set; }
     public int[]         chlCount { get; private set; }
+    public int[]         cellToColCell { get; private set; }
+    public int[]         cellToVisCell { get; private set; }
 
     // --------------Collision data--------------
     // Helper data
@@ -475,11 +477,22 @@ public class LatticePreprocessor
         finalLatticeCells[i] = newCell;
     }
 
+    // Initialise cell refrences
+    cellToColCell = new int[activeCells.Count];
+    cellToVisCell = new int[activeCells.Count];
+    for (int i = 0; i < activeCells.Count; i++) { cellToColCell[i] = -1; cellToVisCell[i] = -1; }
+
     // Convert collision and visual cell refrences to point to the new list insted of the whole lattice
-    for (int i = 0; i < collisionWrapers.Length; i++) 
+    for (int i = 0; i < collisionWrapers.Length; i++)
+    {
+        cellToColCell[collisionWrapers[i].cellIdx] = i;
         collisionWrapers[i].cellIdx = latticeCells[collisionWrapers[i].cellIdx];
+    }
     for (int i = 0; i < visualVerticesCells.Length; i++)
-        visualVerticesCells[i] = latticeCells[visualVerticesCells[i]];
+    {
+        cellToVisCell[visualVerticesCells[i]] = i;
+        visualVerticesCells[i] = latticeCells[visualVerticesCells[i]];   
+    }
 
     // GC final helper data
     latticeCells = null;
