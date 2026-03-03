@@ -279,7 +279,6 @@ public class PhysicsSolver : MonoBehaviour
                 totalCount += globalChlCount[channel];
                 if (i < totalCount) break;
             }
-
             Gizmos.color = s_ChannelColors[channel];
 
             // Get corner positions
@@ -312,10 +311,83 @@ public class PhysicsSolver : MonoBehaviour
             Gizmos.DrawLine(p3, p7);
         }
 
-        for (int i = 0; i < collisionWrapers.Length; i++)
+        for (int i = 0; i < collisionWrapers.Length && debugColMesh; i++)
         {
-            
+            LatticeCell cell = latticeCells[collisionWrapers[i].cellIdx];
+            int totalCount = 0;
+            int channel = 0;
+            for (channel = 0; channel < 8; channel++) 
+            {
+                totalCount += globalChlCount[channel];
+                if (collisionWrapers[i].cellIdx < totalCount) break;
+            }
+            Gizmos.color = s_ChannelColors[channel];
+
+            for (int v = collisionWrapers[i].colVertsRange.x; v < collisionWrapers[i].colVertsRange.y; v++)
+            {
+                Gizmos.DrawSphere(GetDynamicVertexPos(cell, collisionVertices[v]), 0.005f);
+            }
+
+            for (int e = collisionWrapers[i].colEdgesRange.x; e < collisionWrapers[i].colEdgesRange.y; e++)
+            {
+                int2 edge = collisionEdges[e];
+
+                Gizmos.DrawLine(GetDynamicVertexPos(cell, collisionVertices[edge.x]), GetDynamicVertexPos(cell, collisionVertices[edge.y]));
+            }
         }
+
+        for (int i = 0; i < visualVerticesCells.Length && debugVisVerts; i++)
+        {
+            LatticeCell cell = latticeCells[visualVerticesCells[i]];
+            int totalCount = 0;
+            int channel = 0;
+            for (channel = 0; channel < 8; channel++) 
+            {
+                totalCount += globalChlCount[channel];
+                if (visualVerticesCells[i] < totalCount) break;
+            }
+            Gizmos.color = s_ChannelColors[channel];
+
+            Gizmos.DrawSphere(GetDynamicVertexPos(cell, visualVertices[i]), 0.005f);
+        }
+    }
+
+    float3 GetDynamicVertexPos(LatticeCell cell, DynamicVertex vertex)
+    {
+        int4 tet = s_CellTets[vertex.tet];
+
+        int GetCellVertIndex(LatticeCell c, int localIndex)
+        {
+            switch (localIndex)
+            {
+                case 0: return c.v0;
+                case 1: return c.v1;
+                case 2: return c.v2;
+                case 3: return c.v3;
+                case 4: return c.v4;
+                case 5: return c.v5;
+                case 6: return c.v6;
+                case 7: return c.v7;
+                default: return -1;
+            }
+        }
+
+        int vi0 = GetCellVertIndex(cell, tet.x);
+        int vi1 = GetCellVertIndex(cell, tet.y);
+        int vi2 = GetCellVertIndex(cell, tet.z);
+        int vi3 = GetCellVertIndex(cell, tet.w);
+
+        float3 p0 = particles[vi0].currentPosition; // or wherever you store positions
+        float3 p1 = particles[vi1].currentPosition;
+        float3 p2 = particles[vi2].currentPosition;
+        float3 p3 = particles[vi3].currentPosition;
+
+        float4 w = vertex.bary; // barycentric weights (w.x..w.w)
+
+        return  p0 * w.x +
+                p1 * w.y +
+                p2 * w.z +
+                p3 * w.w;
     }
 
 #endregion

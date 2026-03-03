@@ -295,6 +295,7 @@ public class LatticePreprocessor
                     slicedEdges[currentEdgeIdx++] = v0 + t2 * edgeDir;
             }
         }
+        
         for (int activeCellID = 0; activeCellID < activeCells.Count; activeCellID++)
         {
             int cellID = activeCells[activeCellID];
@@ -489,6 +490,7 @@ public class LatticePreprocessor
         LatticeCell newCell = new LatticeCell();
 
         int3 baseCorner = to3D(activeCells[i]);
+        if (latticeCells[activeCells[i]] != i) Debug.Log("wrong");
 
         // Add each cell corner particle
         // 0: (0,0,0)
@@ -587,7 +589,6 @@ public class LatticePreprocessor
     private void AddCell(int cellID)
     {
         if (latticeCells[cellID] != -1) return;
-        latticeCells[cellID] = activeCells.Count;
         int3 baseCorner = to3D(cellID);
 
         // Determine cell channel
@@ -596,9 +597,10 @@ public class LatticePreprocessor
         // Calculate the position using the previous channel counts
         int newCellPos = 0;
         for (int i = 0; i < chl; i++) newCellPos += chlCount[i];
-        activeCells.Insert(newCellPos, cellID);
         // Go through each lattice cell after the newly inseted cell and increase the reference
-        for (int i = newCellPos + 1; i < activeCells.Count; i++) latticeCells[activeCells[i]]++;
+        for (int i = newCellPos; i < activeCells.Count; i++) latticeCells[activeCells[i]]++;
+        activeCells.Insert(newCellPos, cellID);
+        latticeCells[cellID] = newCellPos;
 
         // Add each cell corner particle
         // 0: (0,0,0)

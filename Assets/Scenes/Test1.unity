@@ -433,7 +433,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &845475112
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -560,7 +560,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &1121673683
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -687,7 +687,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &1229018403
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -856,11 +856,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PhysicsSolver
   targetLatticeDimensions:
-    x: 0.15
-    y: 0.15
-    z: 0.15
-  debugLatticeCells: 1
-  debugColMesh: 0
+    x: 0.2
+    y: 0.2
+    z: 0.2
+  debugLatticeCells: 0
+  debugColMesh: 1
   debugVisVerts: 0
 --- !u!4 &1625525668
 Transform:
