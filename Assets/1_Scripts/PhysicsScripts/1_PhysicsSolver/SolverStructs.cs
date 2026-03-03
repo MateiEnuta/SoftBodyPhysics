@@ -41,6 +41,14 @@ namespace SolverStructs
             this.colTrisRange = colTrisRange;
             this.colEdgesRange = colEdgesRange;
         }
+
+        public CollisionWraper(CollisionWraper wraperCopy, int colVertsDiff, int colTriesDiff, int colEdgesDiff)
+        {
+            cellIdx = wraperCopy.cellIdx;
+            colVertsRange = wraperCopy.colVertsRange + new int2(colVertsDiff);
+            colTrisRange = wraperCopy.colTrisRange + new int2(colTriesDiff);
+            colEdgesRange = wraperCopy.colEdgesRange + new int2(colEdgesDiff);
+        }
     }
 
     public struct BodyWraper
@@ -53,13 +61,15 @@ namespace SolverStructs
         public int2 colEdgesRange;
         public int2 colWrapersRange;
         public int2 visVerticesRange;
+        public int2 visWrapersRange;
 
         public BodyWraper(LatticePreprocessor latticePreprocessor)
         {
             this.latticePreprocessor = latticePreprocessor;
             cellRanges = new int2[8];
             particlesRange = colVertsRange = colTrisRange = 
-            colWrapersRange = colEdgesRange = visVerticesRange = int2.zero;
+            colWrapersRange = colEdgesRange = visVerticesRange = 
+            visWrapersRange = int2.zero;
         }
     }
 }

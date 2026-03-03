@@ -70,7 +70,7 @@ public class LatticePreprocessor
     // --------------Visual data--------------
     // Persistent data
     public DynamicVertex[] visualVertices { get; private set; }
-    public int[]           visualVerticesCells { get; private set; }
+    public int3[]          visualVerticesWrapers { get; private set; }
 
     public LatticePreprocessor(LatticeBody latticeBody, float3 targetLatticeDimensions)
     {
@@ -383,6 +383,9 @@ public class LatticePreprocessor
                 }
             }
 
+            // Empty the stride array to use later for vertices
+            cellStrides[cellID] = 0;
+
             // Clear dedupers for the next cell
             cellVertDeduper.Clear();
             cellEdgeDeduper.Clear();
@@ -405,8 +408,9 @@ public class LatticePreprocessor
         // Cache and assign new final arrays
         Mesh visualMesh = latticeBody.visualMesh;
         Vector3[] meshVisualVertices = visualMesh.vertices;
-        visualVertices = new DynamicVertex[meshVisualVertices.Length];
-        visualVerticesCells = new int[meshVisualVertices.Length];
+        int visualWrapersCount = 0;
+        // Translator for each cell
+        Dictionary<int2, int> cellToVertex = new Dictionary<int2, int>(meshVisualVertices.Length);
 
         for (int i = 0; i < meshVisualVertices.Length; i++)
         {
@@ -417,9 +421,36 @@ public class LatticePreprocessor
             int cellID = to1D(cellCoords);
             AddCell(cellID);
 
-            // Create a dynamic vertex and a separate reference to the cell
-            visualVertices[i] = GetCellDynamicVertex(cellID, (float3)meshVisualVertices[i]);
-            visualVerticesCells[i] = cellID;  // Array index that would later be changed to final list
+            // Append new element using the stride (0...n)
+            if (cellStrides[cellID] == 0) visualWrapersCount++;
+            cellToVertex.Add(new int2(cellID, cellStrides[cellID]++), i);
+        }
+
+        visualVertices = new DynamicVertex[meshVisualVertices.Length];
+        int visualVerticesCount = 0;
+        visualVerticesWrapers = new int3[visualWrapersCount];
+        visualWrapersCount = 0;
+
+        for (int activeCellID = 0; activeCellID < activeCells.Count; activeCellID++)
+        {
+            int cellID = activeCells[activeCellID];
+            if (cellStrides[cellID] == 0) continue;
+
+            int initialVisualVertCount = visualVerticesCount;
+
+            // Loop though the stride (number of vertices for this cell)
+            for (int stride = 0; stride < cellStrides[cellID]; stride++)
+            {
+                visualVertices[visualVerticesCount++] = GetCellDynamicVertex(
+                    cellID, meshVisualVertices[cellToVertex[new int2(cellID, stride)]]
+                );
+            }
+
+            // Add a new visual cell wraper
+            visualVerticesWrapers[visualWrapersCount++] = new int3(
+                cellID,  // Array index that would later be changed to final list
+                initialVisualVertCount, visualVerticesCount
+            );
         }
 
     #endregion
@@ -536,10 +567,10 @@ public class LatticePreprocessor
 
         cellToColCell[collisionWrapers[i].cellIdx] = i;
     }
-    for (int i = 0; i < visualVerticesCells.Length; i++)
+    for (int i = 0; i < visualVerticesWrapers.Length; i++)
     {
-        visualVerticesCells[i] = latticeCells[visualVerticesCells[i]];
-        cellToVisCell[visualVerticesCells[i]] = i;
+        visualVerticesWrapers[i].x = latticeCells[visualVerticesWrapers[i].x];
+        cellToVisCell[visualVerticesWrapers[i].x] = i;
     }
 
     // GC final helper data

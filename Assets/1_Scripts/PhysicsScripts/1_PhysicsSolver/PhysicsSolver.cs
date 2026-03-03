@@ -33,7 +33,7 @@ public class PhysicsSolver : MonoBehaviour
 
     // --------------Visual data--------------
     private NativeList<DynamicVertex> visualVertices;
-    private NativeList<int>           visualVerticesCells;
+    private NativeList<int3>          visualWrapers;
 
 
 #region Initialisation
@@ -52,6 +52,7 @@ public class PhysicsSolver : MonoBehaviour
         int initialColEdgeCount = collisionEdges.Length;
         int initialColWraperCount = collisionWrapers.Length;
         int initialVisVerticesCount = visualVertices.Length;
+        int initialVisWrapersCount = visualWrapers.Length;
 
 
         // Add particles
@@ -124,7 +125,7 @@ public class PhysicsSolver : MonoBehaviour
 
                 latticeCells[writeStart + i] = newCell;
                 latticeColReferences[writeStart + i] = currentProcess.cellToColCell[currentLatticeCell] + initialColWraperCount;
-                latticeVisReferences[writeStart + i] = currentProcess.cellToVisCell[currentLatticeCell] + initialVisVerticesCount;
+                latticeVisReferences[writeStart + i] = currentProcess.cellToVisCell[currentLatticeCell] + initialVisWrapersCount;
                 // Increment the pre processor lattice index
                 currentLatticeCell++;
             }
@@ -142,11 +143,14 @@ public class PhysicsSolver : MonoBehaviour
         for (int i = 0; i < currentProcess.collisionVertices.Count; i++)
             collisionVertices.Add(currentProcess.collisionVertices[i]);
         for (int i = 0; i < currentProcess.collisionTriangles.Count; i++)
-            collisionTriangles.Add(currentProcess.collisionTriangles[i]);
+            collisionTriangles.Add(currentProcess.collisionTriangles[i] + new int3(initialColVertCount));
         for (int i = 0; i < currentProcess.collisionEdges.Count; i++)
-            collisionEdges.Add(currentProcess.collisionEdges[i]);
+            collisionEdges.Add(currentProcess.collisionEdges[i] + new int2(initialColVertCount));
         for (int i = 0; i < currentProcess.collisionWrapers.Count; i++)
-            collisionWrapers.Add(currentProcess.collisionWrapers[i]);
+            collisionWrapers.Add(new CollisionWraper(
+                currentProcess.collisionWrapers[i], // Copy from the reference to the new wraper
+                initialColVertCount, initialColTriCount, initialColEdgeCount
+            ));
         // Store collision data range
         bodyWraper.colVertsRange = new int2(initialColVertCount, collisionVertices.Length);
         bodyWraper.colTrisRange = new int2(initialColTriCount, collisionTriangles.Length);
@@ -155,11 +159,11 @@ public class PhysicsSolver : MonoBehaviour
 
         // Add visual data
         for (int i = 0; i < currentProcess.visualVertices.Length; i++)
-        {
             visualVertices.Add(currentProcess.visualVertices[i]);
-            visualVerticesCells.Add(currentProcess.visualVerticesCells[i]);
-        }
+        for (int i = 0; i < currentProcess.visualVerticesWrapers.Length; i++)
+            visualWrapers.Add(currentProcess.visualVerticesWrapers[i] + new int3(initialVisVerticesCount));
         bodyWraper.visVerticesRange = new int2(initialVisVerticesCount, visualVertices.Length);
+        bodyWraper.visWrapersRange = new int2(initialVisWrapersCount, visualWrapers.Length);
 
 
         // Assign the new lattice body wraper
@@ -178,7 +182,12 @@ public class PhysicsSolver : MonoBehaviour
                 wraperCopy.cellIdx = i;
                 collisionWrapers[latticeColReferences[i]] = wraperCopy;
             }
-            if (latticeVisReferences[i] != -1) visualVerticesCells[latticeVisReferences[i]] = i;
+            if (latticeVisReferences[i] != -1) 
+            {
+                int3 wraperCopy = visualWrapers[latticeVisReferences[i]];
+                wraperCopy.x = i;
+                visualWrapers[latticeVisReferences[i]] = wraperCopy;
+            }
         }
     }
 
@@ -209,7 +218,7 @@ public class PhysicsSolver : MonoBehaviour
 
         // Visual data allocation
         visualVertices = new NativeList<DynamicVertex>(Allocator.Persistent);
-        visualVerticesCells = new NativeList<int>(Allocator.Persistent);
+        visualWrapers = new NativeList<int3>(Allocator.Persistent);
     }
 
     private void DisposeLists()
@@ -222,7 +231,7 @@ public class PhysicsSolver : MonoBehaviour
         if (collisionEdges.IsCreated) collisionEdges.Dispose();
         if (collisionWrapers.IsCreated) collisionWrapers.Dispose();
         if (visualVertices.IsCreated) visualVertices.Dispose();
-        if (visualVerticesCells.IsCreated) visualVerticesCells.Dispose();
+        if (visualWrapers.IsCreated) visualWrapers.Dispose();
     }
 
 
@@ -273,7 +282,7 @@ public class PhysicsSolver : MonoBehaviour
         {
             LatticeCell cell = latticeCells[i];
             int totalCount = 0;
-            int channel = 0;
+            int channel;
             for (channel = 0; channel < 8; channel++) 
             {
                 totalCount += globalChlCount[channel];
@@ -315,7 +324,7 @@ public class PhysicsSolver : MonoBehaviour
         {
             LatticeCell cell = latticeCells[collisionWrapers[i].cellIdx];
             int totalCount = 0;
-            int channel = 0;
+            int channel;
             for (channel = 0; channel < 8; channel++) 
             {
                 totalCount += globalChlCount[channel];
@@ -336,19 +345,22 @@ public class PhysicsSolver : MonoBehaviour
             }
         }
 
-        for (int i = 0; i < visualVerticesCells.Length && debugVisVerts; i++)
+        for (int i = 0; i < visualWrapers.Length && debugVisVerts; i++)
         {
-            LatticeCell cell = latticeCells[visualVerticesCells[i]];
+            LatticeCell cell = latticeCells[visualWrapers[i].x];
             int totalCount = 0;
-            int channel = 0;
+            int channel;
             for (channel = 0; channel < 8; channel++) 
             {
                 totalCount += globalChlCount[channel];
-                if (visualVerticesCells[i] < totalCount) break;
+                if (visualWrapers[i].x < totalCount) break;
             }
             Gizmos.color = s_ChannelColors[channel];
 
-            Gizmos.DrawSphere(GetDynamicVertexPos(cell, visualVertices[i]), 0.005f);
+            for (int v = visualWrapers[i].y; v < visualWrapers[i].z; v++)
+            {
+                Gizmos.DrawSphere(GetDynamicVertexPos(cell, visualVertices[v]), 0.005f);
+            }
         }
     }
 
