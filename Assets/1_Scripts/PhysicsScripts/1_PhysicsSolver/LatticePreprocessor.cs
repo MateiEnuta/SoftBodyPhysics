@@ -62,10 +62,10 @@ public class LatticePreprocessor
 
     // --------------Collision data--------------
     // Persistent data
-    public DynamicVertex[]   collisionVertices { get; private set; }
-    public int3[]            collisionTriangles { get; private set; }
-    public int2[]            collisionEdges { get; private set; }
-    public CollisionWraper[] collisionWrapers { get; private set; }
+    public List<DynamicVertex>   collisionVertices { get; private set; }
+    public List<int3>            collisionTriangles { get; private set; }
+    public List<int2>            collisionEdges { get; private set; }
+    public List<CollisionWraper> collisionWrapers { get; private set; }
 
     // --------------Visual data--------------
     // Persistent data
@@ -100,7 +100,6 @@ public class LatticePreprocessor
 
         // 3) Final lattice data (world-space cell size)
         latticeResolution = new int3(nx, ny, nz);
-        Debug.Log(latticeResolution);
         latticeDimensions = new float3(
             boundsSize.x / nx,
             boundsSize.y / ny,
@@ -131,18 +130,9 @@ public class LatticePreprocessor
         MeshMath.RemoveDuplicateVertices(ref meshCollisionVertices, ref meshCollisionTriangles, 1e-06f);
 
         // Allocate helper hashes
-        List<float3>                    initialColVerts = new List<float3>();
-        Dictionary<(Vec3Key, int), int> initialColVertsRef = new Dictionary<(Vec3Key, int), int>();
-        List<int4>                      initialColTries = new List<int4>();
-        HashSet<int3>                   initialColEdges = new HashSet<int3>();
+        Dictionary<int2, int> cellToTri   = new Dictionary<int2, int>();
+        int[]                 cellStrides = new int[maxNumberOfCells];
 
-        // Pre allocate data for the mesh cutter
-        float3[] xSliceEdges = new float3[5];
-        int xSliceEdgesCount;
-        float3[] ySliceEdges = new float3[7];
-        int ySliceEdgesCount;
-        float3[] zSliceEdges = new float3[9];
-        int zSliceEdgesCount;
         // Run through each ref triangle and cut it
         for (int t = 0; t < meshCollisionTriangles.Length; t+=3)
         {
@@ -170,39 +160,160 @@ public class LatticePreprocessor
             float3 maxPosInLattice = maxBB - latticeNegativeCorner;
             int3 maxNegativeCorner = (int3)(maxPosInLattice / latticeDimensions);
 
-        #region Cell Cutter
-            static void TryCutEdge(float3[] slicedEdges, ref int currentEdgeIdx,
-                float3 v0, float3 v1,  float planeValueBack,  float planeValueFront, int axis)
+            // Narrow-phase tri vs box test, assuming AABBs already overlap.
+            bool TriangleIntersectsCell_Narrow(float3 v0, float3 v1, float3 v2,
+                                            float3 boxCenter, float3 halfExtents)
             {
-                // Tries to first add the current vertex then the cut edge if it exists
-                float v0Val = v0[axis];
-                bool firstWasAdded = false;
-                if (v0Val >= planeValueBack - 1e-06f && v0Val <= planeValueFront + 1e-06f) 
-                    { slicedEdges[currentEdgeIdx++] = v0; firstWasAdded = true; }
-                // Test for plane intersections
-                float3 edgeDir = v1 - v0;
-                if (math.abs(edgeDir[axis]) > 1e-06f)
+                // Move triangle into box-centered space
+                v0 -= boxCenter;
+                v1 -= boxCenter;
+                v2 -= boxCenter;
+
+                float3 e0 = v1 - v0;
+                float3 e1 = v2 - v1;
+                float3 e2 = v0 - v2;
+
+                // ---- 1) Triangle plane vs box ----
+                float3 normal = math.cross(e0, e1);
+                if (math.all(math.abs(normal) < 1e-8f))
+                    return true; // degenerate triangle, treat as hit
+
+                float p0 = math.dot(v0, normal);
+                float p1 = math.dot(v1, normal);
+                float p2 = math.dot(v2, normal);
+                float minP = math.min(p0, math.min(p1, p2));
+                float maxP = math.max(p0, math.max(p1, p2));
+
+                float rPlane =
+                    halfExtents.x * math.abs(normal.x) +
+                    halfExtents.y * math.abs(normal.y) +
+                    halfExtents.z * math.abs(normal.z);
+
+                if (minP > rPlane || maxP < -rPlane)
+                    return false;
+
+                // ---- 2) Edge × box-axis tests (no arrays, fully unrolled) ----
+                // Helper local function
+                bool TestAxis(float3 axis)
                 {
-                    float t1 = (planeValueBack - v0[axis]) / edgeDir[axis];
-                    float t2 = (planeValueFront - v0[axis]) / edgeDir[axis];
+                    if (math.all(math.abs(axis) < 1e-8f))
+                        return true; // degenerate axis, skip
 
-                    // Swap to preserve clock wise orientation
-                    if (t2 < t1) (t2, t1) = (t1, t2);
-                    if (firstWasAdded && t2 < 1e-04f) return;
+                    float t0 = math.dot(v0, axis);
+                    float t1 = math.dot(v1, axis);
+                    float t2 = math.dot(v2, axis);
+                    float triMin = math.min(t0, math.min(t1, t2));
+                    float triMax = math.max(t0, math.max(t1, t2));
 
-                    // Add them only if they are exactly between planes
-                    if (t1 > 1e-06f && t1 < 1f - 1e-06f && !firstWasAdded)
-                        slicedEdges[currentEdgeIdx++] = v0 + t1 * edgeDir;
-                    if (t2 > 1e-06f && t2 < 1f - 1e-06f)
-                        slicedEdges[currentEdgeIdx++] = v0 + t2 * edgeDir;
+                    float r =
+                        halfExtents.x * math.abs(axis.x) +
+                        halfExtents.y * math.abs(axis.y) +
+                        halfExtents.z * math.abs(axis.z);
+
+                    return !(triMin > r || triMax < -r);
                 }
+
+                // Box axes: (1,0,0), (0,1,0), (0,0,1)
+                // e0
+                if (!TestAxis(math.cross(e0, new float3(1,0,0)))) return false;
+                if (!TestAxis(math.cross(e0, new float3(0,1,0)))) return false;
+                if (!TestAxis(math.cross(e0, new float3(0,0,1)))) return false;
+
+                // e1
+                if (!TestAxis(math.cross(e1, new float3(1,0,0)))) return false;
+                if (!TestAxis(math.cross(e1, new float3(0,1,0)))) return false;
+                if (!TestAxis(math.cross(e1, new float3(0,0,1)))) return false;
+
+                // e2
+                if (!TestAxis(math.cross(e2, new float3(1,0,0)))) return false;
+                if (!TestAxis(math.cross(e2, new float3(0,1,0)))) return false;
+                if (!TestAxis(math.cross(e2, new float3(0,0,1)))) return false;
+
+                return true;
             }
-            // Loop though each cell touched by the triangle bounding box
-            // And cut the triangle for each on of them
             for (int x = minNegativeCorner.x; x <= maxNegativeCorner.x; x++)
             {
-                float xPlaneValueBack = latticeNegativeCorner.x + latticeDimensions.x * x;
-                float xPlaneValueFront = latticeNegativeCorner.x + latticeDimensions.x * (x + 1);
+                for (int y = minNegativeCorner.y; y <= maxNegativeCorner.y; y++)
+                {
+                    for (int z = minNegativeCorner.z; z <= maxNegativeCorner.z; z++)
+                    {
+                        int3 cellCoords = new int3(x, y, z);
+                        float3 cellNegativeCorner = latticeNegativeCorner + cellCoords * latticeDimensions;
+                        float3 cellMiddle = cellNegativeCorner + 0.5f * latticeDimensions;
+
+                        if (!TriangleIntersectsCell_Narrow(t1, t2, t3, cellMiddle, latticeDimensions * 0.5f)) continue;
+
+                        int cellID = to1D(cellCoords);
+                        AddCell(cellID);
+
+                        // Add cell reference
+                        cellToTri.Add(new int2(cellID, cellStrides[cellID]++), t);
+                    }
+                }
+            }
+        }
+
+        // Pre allocate data for the mesh cutter
+        float3[] xSliceEdges = new float3[5];
+        int xSliceEdgesCount;
+        float3[] ySliceEdges = new float3[7];
+        int ySliceEdgesCount;
+        float3[] zSliceEdges = new float3[9];
+        int zSliceEdgesCount;
+
+        collisionVertices = new List<DynamicVertex>();
+        collisionTriangles = new List<int3>();
+        collisionEdges = new List<int2>();
+        collisionWrapers = new List<CollisionWraper>();
+
+        Dictionary<Vec3Key, int> cellVertDeduper = new Dictionary<Vec3Key, int>();
+        HashSet<int2>            cellEdgeDeduper = new HashSet<int2>();
+
+        static void TryCutEdge(float3[] slicedEdges, ref int currentEdgeIdx,
+            float3 v0, float3 v1,  float planeValueBack,  float planeValueFront, int axis)
+        {
+            // Tries to first add the current vertex then the cut edge if it exists
+            float v0Val = v0[axis];
+            bool firstWasAdded = false;
+            if (v0Val >= planeValueBack - 1e-06f && v0Val <= planeValueFront + 1e-06f) 
+                { slicedEdges[currentEdgeIdx++] = v0; firstWasAdded = true; }
+            // Test for plane intersections
+            float3 edgeDir = v1 - v0;
+            if (math.abs(edgeDir[axis]) > 1e-06f)
+            {
+                float t1 = (planeValueBack - v0[axis]) / edgeDir[axis];
+                float t2 = (planeValueFront - v0[axis]) / edgeDir[axis];
+
+                // Swap to preserve clock wise orientation
+                if (t2 < t1) (t2, t1) = (t1, t2);
+                if (firstWasAdded && t2 < 1e-04f) return;
+
+                // Add them only if they are exactly between planes
+                if (t1 > 1e-06f && t1 < 1f - 1e-06f && !firstWasAdded)
+                    slicedEdges[currentEdgeIdx++] = v0 + t1 * edgeDir;
+                if (t2 > 1e-06f && t2 < 1f - 1e-06f)
+                    slicedEdges[currentEdgeIdx++] = v0 + t2 * edgeDir;
+            }
+        }
+        for (int activeCellID = 0; activeCellID < activeCells.Count; activeCellID++)
+        {
+            int cellID = activeCells[activeCellID];
+            int3 cellCoords = to3D(cellID);
+
+            int initialColVertCount = collisionVertices.Count;
+            int initialColTriCount = collisionTriangles.Count;
+            int initialColEdgeCount = collisionEdges.Count;
+
+            for (int stride = 0; stride < cellStrides[cellID]; stride++)
+            {
+                int triangleIdx = cellToTri[new int2(cellID, stride)];
+                float3 t1 = meshCollisionVertices[meshCollisionTriangles[triangleIdx]];
+                float3 t2 = meshCollisionVertices[meshCollisionTriangles[triangleIdx+1]];
+                float3 t3 = meshCollisionVertices[meshCollisionTriangles[triangleIdx+2]];
+
+                // X plane cutting
+                float xPlaneValueBack = latticeNegativeCorner.x + latticeDimensions.x * cellCoords.x;
+                float xPlaneValueFront = latticeNegativeCorner.x + latticeDimensions.x * (cellCoords.x + 1);
                 xSliceEdgesCount = 0;
 
                 // Test each triangle edge and
@@ -214,130 +325,77 @@ public class LatticePreprocessor
                 // v2-v0 edge
                 TryCutEdge(xSliceEdges, ref xSliceEdgesCount, t3, t1, xPlaneValueBack, xPlaneValueFront, 0);
 
-                for (int y = minNegativeCorner.y; y <= maxNegativeCorner.y; y++)
+
+                // Y plane cutting
+                float yPlaneValueBack = latticeNegativeCorner.y + latticeDimensions.y * cellCoords.y;
+                float yPlaneValueFront = latticeNegativeCorner.y + latticeDimensions.y * (cellCoords.y + 1);
+                ySliceEdgesCount = 0;
+
+                // Loop though each edge of the x slice
+                // cutting and adding it to the y slice list
+                for (int i = 0; i < xSliceEdgesCount; i++)
                 {
-                    float yPlaneValueBack = latticeNegativeCorner.y + latticeDimensions.y * y;
-                    float yPlaneValueFront = latticeNegativeCorner.y + latticeDimensions.y * (y + 1);
-                    ySliceEdgesCount = 0;
+                    float3 e0 = xSliceEdges[i];
+                    float3 e1 = i+1 == xSliceEdgesCount ? xSliceEdges[0] : xSliceEdges[i+1];
+                    
+                    // Cut if possible
+                    TryCutEdge(ySliceEdges, ref ySliceEdgesCount, e0, e1, yPlaneValueBack, yPlaneValueFront, 1);
+                }
 
-                    // Loop though each edge of the x slice
-                    // cutting and adding it to the y slice list
-                    for (int i = 0; i < xSliceEdgesCount; i++)
-                    {
-                        float3 e0 = xSliceEdges[i];
-                        float3 e1 = i+1 == xSliceEdgesCount ? xSliceEdges[0] : xSliceEdges[i+1];
-                        
-                        // Cut if possible
-                        TryCutEdge(ySliceEdges, ref ySliceEdgesCount, e0, e1, yPlaneValueBack, yPlaneValueFront, 1);
-                    }
 
-                    for (int z = minNegativeCorner.z; z <= maxNegativeCorner.z; z++)
-                    {
-                        float zPlaneValueBack = latticeNegativeCorner.z + latticeDimensions.z * z;
-                        float zPlaneValueFront = latticeNegativeCorner.z + latticeDimensions.z * (z + 1);
-                        zSliceEdgesCount = 0;
+                // Z plane cutting
+                float zPlaneValueBack = latticeNegativeCorner.z + latticeDimensions.z * cellCoords.z;
+                float zPlaneValueFront = latticeNegativeCorner.z + latticeDimensions.z * (cellCoords.z + 1);
+                zSliceEdgesCount = 0;
 
-                        // Loop though each edge of the y slice
-                        // cutting and adding it to the z slice list
-                        for (int i = 0; i < ySliceEdgesCount; i++)
-                        {
-                            float3 e0 = ySliceEdges[i];
-                            float3 e1 = i+1 == ySliceEdgesCount ? ySliceEdges[0] : ySliceEdges[i+1];
+                // Loop though each edge of the y slice
+                // cutting and adding it to the z slice list
+                for (int i = 0; i < ySliceEdgesCount; i++)
+                {
+                    float3 e0 = ySliceEdges[i];
+                    float3 e1 = i+1 == ySliceEdgesCount ? ySliceEdges[0] : ySliceEdges[i+1];
 
-                            // Cut if possible
-                            TryCutEdge(zSliceEdges, ref zSliceEdgesCount, e0, e1, zPlaneValueBack, zPlaneValueFront, 2);
-                        }
-                        // Discard it it doesn't make a triangle
-                        if (zSliceEdgesCount <= 2) continue;
+                    // Cut if possible
+                    TryCutEdge(zSliceEdges, ref zSliceEdgesCount, e0, e1, zPlaneValueBack, zPlaneValueFront, 2);
+                }
+                // Discard it it doesn't make a triangle
+                if (zSliceEdgesCount <= 2) continue;
 
-                        // Double checks if the cell intersects the trianglex
-                        int3 cellCoords = new int3(x, y, z);
-                        int cellID = to1D(cellCoords);
-                        AddCell(cellID);
-                        
-                        // Add each particle individually
-                        for (int i = 0; i < zSliceEdgesCount; i++)
-                        {
-                            initialColVertsRef.TryAdd((new Vec3Key(zSliceEdges[i], 1e-06f), cellID), initialColVerts.Count);
-                            initialColVerts.Add(zSliceEdges[i]);
-                        }
 
-                        // Cache the main vertex
-                        int v1 = initialColVertsRef[(new Vec3Key(zSliceEdges[0], 1e-06f), cellID)];
-                        for (int i = 1; i < zSliceEdgesCount - 1; i++)
-                        {
-                            // Compute the next 2 vertices
-                            int v2 = initialColVertsRef[(new Vec3Key(zSliceEdges[i], 1e-06f), cellID)];
-                            int v3 = initialColVertsRef[(new Vec3Key(zSliceEdges[i + 1], 1e-06f), cellID)];
-                            
-                            // Add the triangle
-                            initialColTries.Add(new int4(v1, v2, v3, cellID));
+                // Add the vertices
+                for (int i = 0; i < zSliceEdgesCount; i++)
+                    if (cellVertDeduper.TryAdd(new Vec3Key(zSliceEdges[i], 1e-05f), collisionVertices.Count))
+                        collisionVertices.Add(GetCellDynamicVertex(cellID, zSliceEdges[i]));
 
-                            // Add the edges in ascending index order
-                            initialColEdges.Add(v1 < v2 ? new int3(v1, v2, cellID) : new int3(v2, v1, cellID));
-                            initialColEdges.Add(v2 < v3 ? new int3(v2, v3, cellID) : new int3(v3, v2, cellID));
-                            initialColEdges.Add(v3 < v1 ? new int3(v3, v1, cellID) : new int3(v1, v3, cellID));
-                        }
-                    }
+                // Add the triangles and edges
+                int c0 = cellVertDeduper[new Vec3Key(zSliceEdges[0], 1e-05f)];
+                for (int i = 1; i < zSliceEdgesCount - 1; i++)
+                {
+                    int c1 = cellVertDeduper[new Vec3Key(zSliceEdges[i], 1e-05f)];
+                    int c2 = cellVertDeduper[new Vec3Key(zSliceEdges[i+1], 1e-05f)];
+
+                    collisionTriangles.Add(new int3(c0, c1, c2));
+
+                    if (cellEdgeDeduper.Add(c0 < c1 ? new int2(c0, c1) : new int2(c1, c0))) collisionEdges.Add(new int2(c0, c1));
+                    if (cellEdgeDeduper.Add(c1 < c2 ? new int2(c1, c2) : new int2(c2, c1))) collisionEdges.Add(new int2(c1, c2));
+                    if (cellEdgeDeduper.Add(c2 < c0 ? new int2(c2, c0) : new int2(c0, c2))) collisionEdges.Add(new int2(c2, c0));
                 }
             }
-        #endregion
-        }
 
-        // Translators used to retriece cell data fast
-        Dictionary<int2, float3> initialTranslatorColVerts = new Dictionary<int2, float3>(initialColVerts.Count);
-        Dictionary<int2, int3>   initialTranslatorColTries = new Dictionary<int2, int3>(initialColTries.Count);
-        Dictionary<int2, int2>   initialTranslatorColEdges = new Dictionary<int2, int2>(initialColEdges.Count);
-        int3[] cellStride = new int3[maxNumberOfCells];
+            // Clear dedupers for the next cell
+            cellVertDeduper.Clear();
+            cellEdgeDeduper.Clear();
 
-        foreach (KeyValuePair<(Vec3Key, int), int> colVert in initialColVertsRef)
-            initialTranslatorColVerts.Add(new int2(colVert.Key.Item2, cellStride[colVert.Key.Item2].x++), initialColVerts[colVert.Value]);
-        foreach (int4 tri in initialColTries)
-            initialTranslatorColTries.Add(new int2(tri.w, cellStride[tri.w].y++), tri.xyz);
-        foreach (int3 edge in initialColEdges)
-            initialTranslatorColEdges.Add(new int2(edge.z, cellStride[edge.z].z++), edge.xy);
+            // Safety exit if there is no data added
+            if (initialColVertCount == collisionVertices.Count) continue;
 
-        // Setup all permanent collision data
-        collisionVertices  = new DynamicVertex[initialColVerts.Count];
-        collisionTriangles = new int3[initialColTries.Count];
-        collisionEdges     = new int2[initialColEdges.Count];
-        collisionWrapers   = new CollisionWraper[activeCells.Count];
-
-        // For knowing at which element we are
-        int currentColVertCount   = 0;
-        int currentColTriCount    = 0;
-        int currentColEdgeCount   = 0;
-        int currentColWraperCount = 0;
-
-        for (int i = 0; i < activeCells.Count; i++)
-        {
-            // Store the initial list count
-            int cellID = activeCells[i];
-            int initialColVertCount   = currentColVertCount;
-            int initialColTriCount    = currentColTriCount;
-            int initialColEdgeCount   = currentColEdgeCount;
-
-            // Loop through each collision vertex and store a dynamic vertex
-            for (int j = 0; j < cellStride[cellID].x; j++)
-                collisionVertices[currentColVertCount++] = GetCellDynamicVertex(
-                    cellID, initialTranslatorColVerts[new int2(cellID, j)]
-                );
-
-            // Store the triangles
-            for (int j = 0; j < cellStride[cellID].y; j++)
-                collisionTriangles[currentColTriCount++] = initialTranslatorColTries[new int2(cellID, j)];
-
-            // Store the edges
-            for (int j = 0; j < cellStride[cellID].z; j++)
-                collisionEdges[currentColEdgeCount++] = initialTranslatorColEdges[new int2(cellID, j)];
-
-            // Make a wraper that has this actice cell index
-            collisionWrapers[currentColWraperCount++] = new CollisionWraper(
+            // Create a new wraper
+            collisionWrapers.Add(new CollisionWraper(
                 cellID,  // Array index that would later be changed to final list
-                new int2(initialColVertCount, currentColVertCount - initialColVertCount),
-                new int2(initialColTriCount, currentColTriCount - initialColTriCount),
-                new int2(initialColEdgeCount, currentColEdgeCount - initialColEdgeCount)
-            );
+                new int2(initialColVertCount, collisionVertices.Count),
+                new int2(initialColTriCount, collisionTriangles.Count),
+                new int2(initialColEdgeCount, collisionEdges.Count)
+            ));
         }
 
     #endregion
@@ -368,7 +426,7 @@ public class LatticePreprocessor
 
         // Helper data types
         HashSet<int> edgeHits = new HashSet<int>();
-        Queue<int> cellQueue = new Queue<int>(1000);
+        Queue<int> cellQueue = new Queue<int>(100);
 
         // Marks every lattice cell as either air or filled
         void FloodFill(bool isOutside)
@@ -384,22 +442,22 @@ public class LatticePreprocessor
                 // Manually add each adjacent cell and verify if it's inside the array
                 // +X
                 int adjCellID = to1D(cellCoords + new int3(1, 0, 0));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 1000) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 100) cellQueue.Enqueue(adjCellID);
                 // -X
                 adjCellID = to1D(cellCoords + new int3(-1, 0, 0));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 1000) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 100) cellQueue.Enqueue(adjCellID);
                 // +Z
                 adjCellID = to1D(cellCoords + new int3(0, 0, 1));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 1000) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 100) cellQueue.Enqueue(adjCellID);
                 // -Z
                 adjCellID = to1D(cellCoords + new int3(0, 0, -1));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 1000) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 100) cellQueue.Enqueue(adjCellID);
                 // +Y
                 adjCellID = to1D(cellCoords + new int3(0, 1, 0));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 1000) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 100) cellQueue.Enqueue(adjCellID);
                 // -Y
                 adjCellID = to1D(cellCoords + new int3(0, -1, 0));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 1000) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 100) cellQueue.Enqueue(adjCellID);
             }
         }
 
@@ -468,9 +526,12 @@ public class LatticePreprocessor
     for (int i = 0; i < activeCells.Count; i++) { cellToColCell[i] = -1; cellToVisCell[i] = -1; }
 
     // Convert collision and visual cell refrences to point to the new list insted of the whole lattice
-    for (int i = 0; i < collisionWrapers.Length; i++)
+    for (int i = 0; i < collisionWrapers.Count; i++)
     {
-        collisionWrapers[i].cellIdx = latticeCells[collisionWrapers[i].cellIdx];
+        CollisionWraper collisionWraper = collisionWrapers[i];
+        collisionWraper.cellIdx = latticeCells[collisionWrapers[i].cellIdx];
+        collisionWrapers[i] = collisionWraper;
+
         cellToColCell[collisionWrapers[i].cellIdx] = i;
     }
     for (int i = 0; i < visualVerticesCells.Length; i++)

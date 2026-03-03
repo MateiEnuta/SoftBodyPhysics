@@ -9,6 +9,7 @@ public class PhysicsSolver : MonoBehaviour
 {
     // --------------Public data--------------
     public float3 targetLatticeDimensions = new float3(1,1,1);
+    public bool debugLatticeCells = false, debugColMesh = false, debugVisVerts = false;
 
     // --------------Solver data--------------
     private bool initialised = false;
@@ -138,13 +139,13 @@ public class PhysicsSolver : MonoBehaviour
 
 
         // Add collision data
-        for (int i = 0; i < currentProcess.collisionVertices.Length; i++)
+        for (int i = 0; i < currentProcess.collisionVertices.Count; i++)
             collisionVertices.Add(currentProcess.collisionVertices[i]);
-        for (int i = 0; i < currentProcess.collisionTriangles.Length; i++)
+        for (int i = 0; i < currentProcess.collisionTriangles.Count; i++)
             collisionTriangles.Add(currentProcess.collisionTriangles[i]);
-        for (int i = 0; i < currentProcess.collisionEdges.Length; i++)
+        for (int i = 0; i < currentProcess.collisionEdges.Count; i++)
             collisionEdges.Add(currentProcess.collisionEdges[i]);
-        for (int i = 0; i < currentProcess.collisionWrapers.Length; i++)
+        for (int i = 0; i < currentProcess.collisionWrapers.Count; i++)
             collisionWrapers.Add(currentProcess.collisionWrapers[i]);
         // Store collision data range
         bodyWraper.colVertsRange = new int2(initialColVertCount, collisionVertices.Length);
@@ -252,12 +253,23 @@ public class PhysicsSolver : MonoBehaviour
         Color.white
     };
 
+    // Tetra order, the same with pre processor
+    static readonly int4[] s_CellTets = new[]
+    {
+        new int4(0, 3, 6, 5),       // new int4(0, 1, 3, 7),
+        new int4(0, 5, 6, 4),       // new int4(0, 3, 2, 7),
+        new int4(0, 6, 3, 2),       // new int4(0, 2, 6, 7),
+        new int4(5, 3, 6, 7),       // new int4(0, 6, 4, 7),
+        new int4(0, 3, 5, 1)        // new int4(0, 4, 5, 7),
+                                    // new int4(0, 5, 1, 7)
+    };
+
     private void OnDrawGizmos()
     {
         if (!Application.isPlaying) return;
         if (!particles.IsCreated || !latticeCells.IsCreated) return;
 
-        for (int i = 0; i < latticeCells.Length; i++)
+        for (int i = 0; i < latticeCells.Length && debugLatticeCells; i++)
         {
             LatticeCell cell = latticeCells[i];
             int totalCount = 0;
@@ -298,6 +310,11 @@ public class PhysicsSolver : MonoBehaviour
             Gizmos.DrawLine(p1, p5);
             Gizmos.DrawLine(p2, p6);
             Gizmos.DrawLine(p3, p7);
+        }
+
+        for (int i = 0; i < collisionWrapers.Length; i++)
+        {
+            
         }
     }
 
