@@ -95,19 +95,10 @@ public class PhysicsSolver : MonoBehaviour
                 insertionPos += existingCount;
                 continue;
             }
-
-            // Ensure space at the end
-            for (int i = 0; i < addCount; i++)
-                latticeCells.Add(new LatticeCell());
-
-            // Shift the existing tail (all cells after this channel’s current block)
-            // from [insertionPos + existingCount .. oldLength-1] up by addCount
-            for (int i = latticeCells.Length - 1; i >= insertionPos + existingCount + addCount; i--)
-                latticeCells[i] = latticeCells[i - addCount];
-
             
             // Fill the gap [insertionPos + existingCount .. insertionPos + existingCount + addCount)
             int writeStart = insertionPos + existingCount;
+            latticeCells.InsertRange(writeStart, addCount);
             latticeColReferences.InsertRange(writeStart, Enumerable.Repeat(-1, addCount));
             latticeVisReferences.InsertRange(writeStart, Enumerable.Repeat(-1, addCount));
 
@@ -124,8 +115,10 @@ public class PhysicsSolver : MonoBehaviour
                 newCell.v7 += initialParticleCount;
 
                 latticeCells[writeStart + i] = newCell;
-                latticeColReferences[writeStart + i] = currentProcess.cellToColCell[currentLatticeCell] + initialColWraperCount;
-                latticeVisReferences[writeStart + i] = currentProcess.cellToVisCell[currentLatticeCell] + initialVisWrapersCount;
+                if (currentProcess.cellToColCell[currentLatticeCell] != -1)
+                    latticeColReferences[writeStart + i] = currentProcess.cellToColCell[currentLatticeCell] + initialColWraperCount;
+                if (currentProcess.cellToVisCell[currentLatticeCell] != -1)
+                    latticeVisReferences[writeStart + i] = currentProcess.cellToVisCell[currentLatticeCell] + initialVisWrapersCount;
                 // Increment the pre processor lattice index
                 currentLatticeCell++;
             }
@@ -168,9 +161,14 @@ public class PhysicsSolver : MonoBehaviour
 
         // Assign the new lattice body wraper
         latticeBodies.Add(bodyWraper);
-
-        // At the end update all cell refrences to match the updated list
         UpdateCellVertReferences();
+        // Testing and finally finding that bug [05.03.2026]
+        // HashSet<int> used = new HashSet<int>();
+        // for (int i = 0; i < latticeColReferences.Count; i++)
+        // {
+        //     if (latticeColReferences[i] != -1 && !used.Add(latticeColReferences[i]))
+        //         Debug.Log("Duplicate collision wrapper reference: " + latticeColReferences[i] + " ref: " + i);
+        // }
     }
 
     private void UpdateCellVertReferences()
