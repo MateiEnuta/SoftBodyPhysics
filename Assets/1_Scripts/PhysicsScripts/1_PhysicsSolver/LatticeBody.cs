@@ -4,6 +4,8 @@ public class LatticeBody : MonoBehaviour
 {
     public Mesh collisionMesh;
     public float mass = 1;
+    public float distanceCompliance = 0f;
+    public float volumeCompliance = 0f;
 
     private PhysicsSolver physicsSolver;
     [HideInInspector] public Mesh visualMesh { get; private set; }

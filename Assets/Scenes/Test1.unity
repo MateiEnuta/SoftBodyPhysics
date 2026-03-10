@@ -290,6 +290,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
+  distanceCompliance: 0
+  volumeCompliance: 0
 --- !u!136 &403496962
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -450,6 +452,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
+  distanceCompliance: 0
+  volumeCompliance: 0
 --- !u!135 &562486236
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -577,6 +581,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
+  distanceCompliance: 0
+  volumeCompliance: 0
 --- !u!135 &845475113
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -704,6 +710,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
+  distanceCompliance: 0
+  volumeCompliance: 0
 --- !u!135 &1121673684
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -831,6 +839,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
+  distanceCompliance: 0
+  volumeCompliance: 0
 --- !u!135 &1229018404
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -985,11 +995,16 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PhysicsSolver
   targetLatticeDimensions:
-    x: 0.5
-    y: 0.5
-    z: 0.5
-  debugLatticeCells: 0
-  debugColMesh: 1
+    x: 0.25
+    y: 0.25
+    z: 0.25
+  substeps: 10
+  gravity:
+    x: 0
+    y: -9.81
+    z: 0
+  debugLatticeCells: 1
+  debugColMesh: 0
   debugVisVerts: 0
 --- !u!4 &1625525668
 Transform:
@@ -1198,6 +1213,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
+  distanceCompliance: 0
+  volumeCompliance: 0
 --- !u!135 &2114948095
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -1509,6 +1526,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
+  distanceCompliance: 0
+  volumeCompliance: 0
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -1525,5 +1544,5 @@ SceneRoots:
   - {fileID: 845475116}
   - {fileID: 1121673687}
   - {fileID: 1229018407}
-  - {fileID: 3379513652317650642}
   - {fileID: 403496965}
+  - {fileID: 3379513652317650642}

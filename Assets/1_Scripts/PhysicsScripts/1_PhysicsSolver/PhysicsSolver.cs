@@ -4,23 +4,32 @@ using Unity.Mathematics;
 using UnityEngine;
 using SolverStructs;
 using System.Linq;
+using Unity.Jobs;
 
 public class PhysicsSolver : MonoBehaviour
 {
     // --------------Public data--------------
     public float3 targetLatticeDimensions = new float3(1,1,1);
+    public float substeps = 10;
+    public float3 gravity = Physics.gravity;
+    float damping = 0;
     public bool debugLatticeCells = false, debugColMesh = false, debugVisVerts = false;
 
     // --------------Solver data--------------
     private bool initialised = false;
-    // Lattice bodies data
-    private List<BodyWraper> latticeBodies;
+
+    // --------------Lattice bodies data--------------
+    private NativeList<float3> bodyLatticeDimensions;
+    private NativeList<float>  bodyDistConsCompliance;
+    private NativeList<float>  bodyVolConsCompliance;
+    private List<BodyWraper>   bodyWrapers;
 
     // --------------Particle data--------------
     private NativeList<Particle>    particles;
 
     // --------------Cell data--------------
     private NativeList<LatticeCell> latticeCells;
+    private NativeList<int>         latticeCellBodyRef;
     private List<int>               latticeColReferences;
     private List<int>               latticeVisReferences;
     private int[]                   globalChlCount;
@@ -34,6 +43,53 @@ public class PhysicsSolver : MonoBehaviour
     // --------------Visual data--------------
     private NativeList<DynamicVertex> visualVertices;
     private NativeList<int3>          visualWrapers;
+
+
+#region Simulation
+
+    private void FixedUpdate()
+    {
+        if (!initialised) return;
+        JobHandle handle = default;
+        float dt = Time.fixedDeltaTime / substeps;
+
+        int particleCount = particles.Length;
+
+        for (int i = 0; i < substeps; i++)
+        {
+            ParticleUpdateJob particleUpdateJob = new ParticleUpdateJob
+            {
+                gravity = gravity,
+                dt = dt, particles = particles.AsArray()  
+            };
+            handle = particleUpdateJob.Schedule(particleCount, 32, handle);
+
+            int channelStart = 0;
+            for (int chl = 0; chl < 8; chl++)
+            {
+                DistConsJob distConsJob = new DistConsJob
+                {
+                    dt = dt, damping = damping, channelStart = channelStart, latticeCells = latticeCells.AsArray(),
+                    latticeCellBodyRef = latticeCellBodyRef.AsArray(), bodyLatticeDimensions = bodyLatticeDimensions.AsArray(),
+                    bodyDistConsCompliance = bodyDistConsCompliance.AsArray(), particles = particles.AsArray()
+                };
+                handle = distConsJob.Schedule(globalChlCount[chl], 1, handle);
+
+                channelStart += globalChlCount[chl];
+            }
+
+            channelStart = 0;
+            for (int chl = 0; chl < 8; chl++)
+            {
+                
+                channelStart += globalChlCount[chl];
+            }
+        }
+
+        handle.Complete();
+    }
+
+#endregion
 
 
 #region Initialisation
@@ -99,11 +155,13 @@ public class PhysicsSolver : MonoBehaviour
             // Fill the gap [insertionPos + existingCount .. insertionPos + existingCount + addCount)
             int writeStart = insertionPos + existingCount;
             latticeCells.InsertRange(writeStart, addCount);
+            latticeCellBodyRef.InsertRange(writeStart, addCount);
             latticeColReferences.InsertRange(writeStart, Enumerable.Repeat(-1, addCount));
             latticeVisReferences.InsertRange(writeStart, Enumerable.Repeat(-1, addCount));
 
             for (int i = 0; i < addCount; i++)
             {
+                // Create new cell and offset it's particle references
                 LatticeCell newCell = currentProcess.finalLatticeCells[currentLatticeCell];
                 newCell.v0 += initialParticleCount;
                 newCell.v1 += initialParticleCount;
@@ -115,6 +173,7 @@ public class PhysicsSolver : MonoBehaviour
                 newCell.v7 += initialParticleCount;
 
                 latticeCells[writeStart + i] = newCell;
+                latticeCellBodyRef[writeStart + i] = bodyWrapers.Count;
                 if (currentProcess.cellToColCell[currentLatticeCell] != -1)
                     latticeColReferences[writeStart + i] = currentProcess.cellToColCell[currentLatticeCell] + initialColWraperCount;
                 if (currentProcess.cellToVisCell[currentLatticeCell] != -1)
@@ -159,8 +218,13 @@ public class PhysicsSolver : MonoBehaviour
         bodyWraper.visWrapersRange = new int2(initialVisWrapersCount, visualWrapers.Length);
 
 
-        // Assign the new lattice body wraper
-        latticeBodies.Add(bodyWraper);
+        // Add the new body wraper and body data
+        bodyWrapers.Add(bodyWraper);
+        bodyLatticeDimensions.Add(currentProcess.latticeDimensions * latticeBody.transform.lossyScale);
+        bodyDistConsCompliance.Add(latticeBody.distanceCompliance);
+        bodyVolConsCompliance.Add(latticeBody.volumeCompliance);
+
+        // Update the cell references
         UpdateCellVertReferences();
         // Testing and finally finding that bug [05.03.2026]
         // HashSet<int> used = new HashSet<int>();
@@ -195,7 +259,11 @@ public class PhysicsSolver : MonoBehaviour
         if (initialised) return;
         initialised = true;
 
-        latticeBodies = new List<BodyWraper>();
+        // Body data
+        bodyLatticeDimensions = new NativeList<float3>(Allocator.Persistent);
+        bodyDistConsCompliance = new NativeList<float>(Allocator.Persistent);
+        bodyVolConsCompliance = new NativeList<float>(Allocator.Persistent);
+        bodyWrapers = new List<BodyWraper>();
 
         // Allocate all native lists
         // Particles allocation
@@ -203,6 +271,7 @@ public class PhysicsSolver : MonoBehaviour
 
         // Cell data allocation
         latticeCells = new NativeList<LatticeCell>(Allocator.Persistent);
+        latticeCellBodyRef = new NativeList<int>(Allocator.Persistent);
         globalChlCount = new int[8];
         for (int i = 0; i < 8; i++) globalChlCount[i] = 0;
         latticeColReferences = new List<int>();
@@ -222,8 +291,12 @@ public class PhysicsSolver : MonoBehaviour
     private void DisposeLists()
     {
         // Dispose of all native lists
+        if (bodyLatticeDimensions.IsCreated) bodyLatticeDimensions.Dispose();
+        if (bodyDistConsCompliance.IsCreated) bodyDistConsCompliance.Dispose();
+        if (bodyVolConsCompliance.IsCreated) bodyVolConsCompliance.Dispose();
         if (particles.IsCreated) particles.Dispose();
         if (latticeCells.IsCreated) latticeCells.Dispose();
+        if (latticeCellBodyRef.IsCreated) latticeCellBodyRef.Dispose();
         if (collisionVertices.IsCreated) collisionVertices.Dispose();
         if (collisionTriangles.IsCreated) collisionTriangles.Dispose();
         if (collisionEdges.IsCreated) collisionEdges.Dispose();
@@ -360,6 +433,8 @@ public class PhysicsSolver : MonoBehaviour
                 Gizmos.DrawSphere(GetDynamicVertexPos(cell, visualVertices[v]), 0.005f);
             }
         }
+
+        TestTetVolumes();
     }
 
     float3 GetDynamicVertexPos(LatticeCell cell, DynamicVertex vertex)
@@ -398,6 +473,55 @@ public class PhysicsSolver : MonoBehaviour
                 p1 * w.y +
                 p2 * w.z +
                 p3 * w.w;
+    }
+
+    void TestTetVolumes()
+    {
+        float3 d = new float3(
+            UnityEngine.Random.Range(0.1f, 3f),
+            UnityEngine.Random.Range(0.1f, 3f),
+            UnityEngine.Random.Range(0.1f, 3f)
+        );
+
+        float cellVolume = d.x * d.y * d.z;
+
+        float total = 0f;
+
+        for (int i = 0; i < s_CellTets.Length; i++)
+        {
+            float v = GetTetVolume(i, d);
+            total += v;
+            Debug.Log($"Tet {i}: {s_CellTets[i]} -> volume rel = {v / cellVolume}");
+        }
+
+        float boxVolume = d.x * d.y * d.z;
+    }
+
+        static float GetTetVolume(int tetIndex, float3 d)
+    {
+        int4 tet = s_CellTets[tetIndex];
+
+        float3 a = CornerLocalPos(tet.x, d);
+        float3 b = CornerLocalPos(tet.y, d);
+        float3 c = CornerLocalPos(tet.z, d);
+        float3 e = CornerLocalPos(tet.w, d);
+
+        return math.abs(math.dot(b - a, math.cross(c - a, e - a))) / 6f;
+    }
+
+    static float3 CornerLocalPos(int i, float3 d)
+    {
+        switch (i)
+        {
+            case 0: return new float3(0,   0,   0);
+            case 1: return new float3(d.x, 0,   0);
+            case 2: return new float3(0,   d.y, 0);
+            case 3: return new float3(d.x, d.y, 0);
+            case 4: return new float3(0,   0,   d.z);
+            case 5: return new float3(d.x, 0,   d.z);
+            case 6: return new float3(0,   d.y, d.z);
+            default:return new float3(d.x, d.y, d.z);
+        }
     }
 
 #endregion
