@@ -29,14 +29,14 @@ public struct VolConsJob : IJobParallelFor
 
         for (int i = 0; i < 5; i++)
         {
-            int4 currentTetIdx = GetCellTet(latticeCells[index], i);
+            int4 currentTet = GetCellTet(latticeCells[index], i);
             float initialTetVolume = i == 0 ? bigTetVol : smallTetsVol;
 
-            SolveVolumeConstraint(currentTetIdx, initialTetVolume, cellCompliance);
+            SolveVolumeConstraint(currentTet, initialTetVolume, cellCompliance);
         }
     }
 
-    private void SolveVolumeConstraint(int4 tetIdx, float initialVolume, float compliance)
+    private void SolveVolumeConstraint(int4 tet, float initialVolume, float compliance)
     {
         
     }

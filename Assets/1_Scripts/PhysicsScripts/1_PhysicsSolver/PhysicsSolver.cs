@@ -56,7 +56,8 @@ public class PhysicsSolver : MonoBehaviour
         float dt = Time.fixedDeltaTime / substeps;
 
         int particleCount = particles.Length;
-        int visualWrapersCount = visualWrapers.Length;
+        int visualWraperCount = visualWrapers.Length;
+        int collisionWraperCount = collisionWrapers.Length;
 
         for (int i = 0; i < substeps; i++)
         {
@@ -94,6 +95,14 @@ public class PhysicsSolver : MonoBehaviour
 
                 channelStart += globalChlCount[chl];
             }
+
+            BasicPlaneColJob basicPlaneColJob = new BasicPlaneColJob
+            {
+                yPlanePos = 0f, latticeCells = latticeCells.AsArray(),
+                collisionVertices = collisionVertices.AsArray(), collisionWrapers = collisionWrapers.AsArray(),
+                particles = particles.AsArray()
+            };
+            handle = basicPlaneColJob.Schedule(collisionWraperCount, 32, handle);
         }
 
         VisVertsUpdateJob visVertsUpdateJob = new VisVertsUpdateJob
@@ -102,7 +111,7 @@ public class PhysicsSolver : MonoBehaviour
             visualVerticesData = visualVerticesData.AsArray(), visualVerticesOffset = visualVerticesOffset.AsArray(),
             visualVertices = visualVertices.AsArray(), visualWrapers = visualWrapers.AsArray()
         };
-        handle = visVertsUpdateJob.Schedule(visualWrapersCount, 1, handle);
+        handle = visVertsUpdateJob.Schedule(visualWraperCount, 1, handle);
         handle.Complete();
 
         // Update visuals

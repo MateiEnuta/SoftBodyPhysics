@@ -48,18 +48,18 @@ public struct VisVertsUpdateJob : IJobParallelFor
     }
 
     private static int GetCellVertIndex(LatticeCell c, int localIndex)
+    {
+        switch (localIndex)
         {
-            switch (localIndex)
-            {
-                case 0: return c.v0;
-                case 1: return c.v1;
-                case 2: return c.v2;
-                case 3: return c.v3;
-                case 4: return c.v4;
-                case 5: return c.v5;
-                case 6: return c.v6;
-                case 7: return c.v7;
-                default: return -1;
-            }
+            case 0: return c.v0;
+            case 1: return c.v1;
+            case 2: return c.v2;
+            case 3: return c.v3;
+            case 4: return c.v4;
+            case 5: return c.v5;
+            case 6: return c.v6;
+            case 7: return c.v7;
+            default: return -1;
         }
+    }
 }
