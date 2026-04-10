@@ -54,6 +54,8 @@ namespace SolverStructs
     public struct BodyWraper
     {
         public LatticePreprocessor latticePreprocessor;
+        public Mesh visualMesh;
+        public Transform transform;
         public int2 particlesRange;
         public int2[] cellRanges;
         public int2 colVertsRange;
@@ -66,6 +68,8 @@ namespace SolverStructs
         public BodyWraper(LatticePreprocessor latticePreprocessor)
         {
             this.latticePreprocessor = latticePreprocessor;
+            visualMesh = latticePreprocessor.latticeBody.visualMesh;
+            transform = latticePreprocessor.latticeBody.transform;
             cellRanges = new int2[8];
             particlesRange = colVertsRange = colTrisRange = 
             colWrapersRange = colEdgesRange = visVerticesRange = 

@@ -24,22 +24,32 @@ public struct VolConsJob : IJobParallelFor
         float cellCompliance = bodyVolConsCompliance[latticeCellBodyRef[index]];
         float cellVolume = latticeCellDimensions.x * latticeCellDimensions.y * latticeCellDimensions.z;
 
+        float bigTetVol = cellVolume * (1f/3f);
+        float smallTetsVol = cellVolume * (1f/6f);
+
         for (int i = 0; i < 5; i++)
         {
-            float cellPercentage = i == 0 ? 1f / 3f : 1f / 6f;
-            
+            int4 currentTetIdx = GetCellTet(latticeCells[index], i);
+            float initialTetVolume = i == 0 ? bigTetVol : smallTetsVol;
+
+            SolveVolumeConstraint(currentTetIdx, initialTetVolume, cellCompliance);
         }
     }
 
-    static int4 GetCellTet(int tetIndex)
+    private void SolveVolumeConstraint(int4 tetIdx, float initialVolume, float compliance)
+    {
+        
+    }
+
+    static int4 GetCellTet(LatticeCell c, int tetIndex)
     {
         switch (tetIndex)
         {
-            case 0: return new int4(0, 3, 6, 5);
-            case 1: return new int4(0, 5, 6, 4);
-            case 2: return new int4(0, 6, 3, 2);
-            case 3: return new int4(5, 3, 6, 7);
-            default:return new int4(0, 3, 5, 1);
+            case 0: return new int4(c.v0, c.v3, c.v6, c.v5);
+            case 1: return new int4(c.v0, c.v5, c.v6, c.v4);
+            case 2: return new int4(c.v0, c.v6, c.v3, c.v2);
+            case 3: return new int4(c.v5, c.v3, c.v6, c.v7);
+            default:return new int4(c.v0, c.v3, c.v5, c.v1);
         }
     }
 }

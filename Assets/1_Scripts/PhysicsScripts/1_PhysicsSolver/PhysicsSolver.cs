@@ -12,7 +12,7 @@ public class PhysicsSolver : MonoBehaviour
     public float3 targetLatticeDimensions = new float3(1,1,1);
     public float substeps = 10;
     public float3 gravity = Physics.gravity;
-    float damping = 0;
+    public float damping = 0;
     public bool debugLatticeCells = false, debugColMesh = false, debugVisVerts = false;
 
     // --------------Solver data--------------
@@ -41,7 +41,9 @@ public class PhysicsSolver : MonoBehaviour
     private NativeList<CollisionWraper> collisionWrapers;
 
     // --------------Visual data--------------
-    private NativeList<DynamicVertex> visualVertices;
+    private NativeList<DynamicVertex> visualVerticesData;
+    private NativeList<int>           visualVerticesOffset;
+    private NativeList<float3>        visualVertices;
     private NativeList<int3>          visualWrapers;
 
 
@@ -54,6 +56,7 @@ public class PhysicsSolver : MonoBehaviour
         float dt = Time.fixedDeltaTime / substeps;
 
         int particleCount = particles.Length;
+        int visualWrapersCount = visualWrapers.Length;
 
         for (int i = 0; i < substeps; i++)
         {
@@ -81,12 +84,42 @@ public class PhysicsSolver : MonoBehaviour
             channelStart = 0;
             for (int chl = 0; chl < 8; chl++)
             {
-                
+                VolConsJob volConsJob = new VolConsJob
+                {
+                    dt = dt, damping = damping, channelStart = channelStart, latticeCells = latticeCells.AsArray(),
+                    latticeCellBodyRef = latticeCellBodyRef.AsArray(), bodyLatticeDimensions = bodyLatticeDimensions.AsArray(),
+                    bodyVolConsCompliance = bodyVolConsCompliance.AsArray(), particles = particles.AsArray()
+                };
+                handle = volConsJob.Schedule(globalChlCount[chl], 1, handle);
+
                 channelStart += globalChlCount[chl];
             }
         }
 
+        VisVertsUpdateJob visVertsUpdateJob = new VisVertsUpdateJob
+        {
+            particles = particles.AsArray(), latticeCells = latticeCells.AsArray(),
+            visualVerticesData = visualVerticesData.AsArray(), visualVerticesOffset = visualVerticesOffset.AsArray(),
+            visualVertices = visualVertices.AsArray(), visualWrapers = visualWrapers.AsArray()
+        };
+        handle = visVertsUpdateJob.Schedule(visualWrapersCount, 1, handle);
         handle.Complete();
+
+        // Update visuals
+        foreach (var body in bodyWrapers)
+        {
+            // Calculate the average position
+            float3 averagePos = Vector3.zero;
+            for (int i = body.particlesRange.x; i < body.particlesRange.y; i++) averagePos += particles[i].currentPosition;
+            averagePos /= body.particlesRange.y - body.particlesRange.x;
+            body.transform.position = averagePos;
+
+            for (int i = body.visVerticesRange.x; i < body.visVerticesRange.y; i++) visualVertices[i] -= averagePos;
+
+            body.visualMesh.SetVertices(visualVertices.AsArray(), body.visVerticesRange.x, body.visVerticesRange.y - body.visVerticesRange.x);
+            body.visualMesh.RecalculateBounds();
+            body.visualMesh.RecalculateNormals();
+        }
     }
 
 #endregion
@@ -135,7 +168,7 @@ public class PhysicsSolver : MonoBehaviour
             particles.Add(newParticle);
         }
         // Store particle range
-        bodyWraper.particlesRange = new int2(initialParticleCount, initialParticleCount - particles.Length);
+        bodyWraper.particlesRange = new int2(initialParticleCount, particles.Length);
 
 
         // Add lattice cells
@@ -210,8 +243,12 @@ public class PhysicsSolver : MonoBehaviour
         bodyWraper.colWrapersRange = new int2(initialColWraperCount, collisionWrapers.Length);
 
         // Add visual data
-        for (int i = 0; i < currentProcess.visualVertices.Length; i++)
-            visualVertices.Add(currentProcess.visualVertices[i]);
+        for (int i = 0; i < currentProcess.visualVerticesData.Length; i++)
+        {
+            visualVerticesData.Add(currentProcess.visualVerticesData[i]);
+            visualVerticesOffset.Add(currentProcess.visualVerticesOffset[i] + initialVisVerticesCount);
+            visualVertices.Add(float3.zero);
+        }
         for (int i = 0; i < currentProcess.visualVerticesWrapers.Length; i++)
             visualWrapers.Add(currentProcess.visualVerticesWrapers[i] + new int3(initialVisVerticesCount));
         bodyWraper.visVerticesRange = new int2(initialVisVerticesCount, visualVertices.Length);
@@ -284,7 +321,9 @@ public class PhysicsSolver : MonoBehaviour
         collisionWrapers = new NativeList<CollisionWraper>(Allocator.Persistent);
 
         // Visual data allocation
-        visualVertices = new NativeList<DynamicVertex>(Allocator.Persistent);
+        visualVerticesData = new NativeList<DynamicVertex>(Allocator.Persistent);
+        visualVerticesOffset = new NativeList<int>(Allocator.Persistent);
+        visualVertices = new NativeList<float3>(Allocator.Persistent);
         visualWrapers = new NativeList<int3>(Allocator.Persistent);
     }
 
@@ -301,6 +340,8 @@ public class PhysicsSolver : MonoBehaviour
         if (collisionTriangles.IsCreated) collisionTriangles.Dispose();
         if (collisionEdges.IsCreated) collisionEdges.Dispose();
         if (collisionWrapers.IsCreated) collisionWrapers.Dispose();
+        if (visualVerticesData.IsCreated) visualVerticesData.Dispose();
+        if (visualVerticesOffset.IsCreated) visualVerticesOffset.Dispose();
         if (visualVertices.IsCreated) visualVertices.Dispose();
         if (visualWrapers.IsCreated) visualWrapers.Dispose();
     }
@@ -430,11 +471,9 @@ public class PhysicsSolver : MonoBehaviour
 
             for (int v = visualWrapers[i].y; v < visualWrapers[i].z; v++)
             {
-                Gizmos.DrawSphere(GetDynamicVertexPos(cell, visualVertices[v]), 0.005f);
+                Gizmos.DrawSphere(GetDynamicVertexPos(cell, visualVerticesData[v]), 0.005f);
             }
         }
-
-        TestTetVolumes();
     }
 
     float3 GetDynamicVertexPos(LatticeCell cell, DynamicVertex vertex)
@@ -473,55 +512,6 @@ public class PhysicsSolver : MonoBehaviour
                 p1 * w.y +
                 p2 * w.z +
                 p3 * w.w;
-    }
-
-    void TestTetVolumes()
-    {
-        float3 d = new float3(
-            UnityEngine.Random.Range(0.1f, 3f),
-            UnityEngine.Random.Range(0.1f, 3f),
-            UnityEngine.Random.Range(0.1f, 3f)
-        );
-
-        float cellVolume = d.x * d.y * d.z;
-
-        float total = 0f;
-
-        for (int i = 0; i < s_CellTets.Length; i++)
-        {
-            float v = GetTetVolume(i, d);
-            total += v;
-            Debug.Log($"Tet {i}: {s_CellTets[i]} -> volume rel = {v / cellVolume}");
-        }
-
-        float boxVolume = d.x * d.y * d.z;
-    }
-
-        static float GetTetVolume(int tetIndex, float3 d)
-    {
-        int4 tet = s_CellTets[tetIndex];
-
-        float3 a = CornerLocalPos(tet.x, d);
-        float3 b = CornerLocalPos(tet.y, d);
-        float3 c = CornerLocalPos(tet.z, d);
-        float3 e = CornerLocalPos(tet.w, d);
-
-        return math.abs(math.dot(b - a, math.cross(c - a, e - a))) / 6f;
-    }
-
-    static float3 CornerLocalPos(int i, float3 d)
-    {
-        switch (i)
-        {
-            case 0: return new float3(0,   0,   0);
-            case 1: return new float3(d.x, 0,   0);
-            case 2: return new float3(0,   d.y, 0);
-            case 3: return new float3(d.x, d.y, 0);
-            case 4: return new float3(0,   0,   d.z);
-            case 5: return new float3(d.x, 0,   d.z);
-            case 6: return new float3(0,   d.y, d.z);
-            default:return new float3(d.x, d.y, d.z);
-        }
     }
 
 #endregion

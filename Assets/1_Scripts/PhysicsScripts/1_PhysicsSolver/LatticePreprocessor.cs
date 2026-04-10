@@ -69,7 +69,8 @@ public class LatticePreprocessor
 
     // --------------Visual data--------------
     // Persistent data
-    public DynamicVertex[] visualVertices { get; private set; }
+    public DynamicVertex[] visualVerticesData { get; private set; }
+    public int[]           visualVerticesOffset { get; private set; }
     public int3[]          visualVerticesWrapers { get; private set; }
 
     public LatticePreprocessor(LatticeBody latticeBody, float3 targetLatticeDimensions)
@@ -80,6 +81,9 @@ public class LatticePreprocessor
 
         // 1) World-space bounds
         Bounds visualMeshBounds = latticeBody.visualMesh.bounds;
+        latticeBody.visualMesh.MarkDynamic();
+        latticeBody.visualMesh.RecalculateBounds();
+        latticeBody.visualMesh.RecalculateNormals();
         float EPSILON = 1e-4f;
 
         float3 boundsSize = (float3)visualMeshBounds.size
@@ -411,6 +415,8 @@ public class LatticePreprocessor
         int visualWrapersCount = 0;
         // Translator for each cell
         Dictionary<int2, int> cellToVertex = new Dictionary<int2, int>(meshVisualVertices.Length);
+        visualVerticesOffset = new int[meshVisualVertices.Length];
+        visualVerticesData = new DynamicVertex[meshVisualVertices.Length];
 
         for (int i = 0; i < meshVisualVertices.Length; i++)
         {
@@ -426,7 +432,6 @@ public class LatticePreprocessor
             cellToVertex.Add(new int2(cellID, cellStrides[cellID]++), i);
         }
 
-        visualVertices = new DynamicVertex[meshVisualVertices.Length];
         int visualVerticesCount = 0;
         visualVerticesWrapers = new int3[visualWrapersCount];
         visualWrapersCount = 0;
@@ -441,9 +446,14 @@ public class LatticePreprocessor
             // Loop though the stride (number of vertices for this cell)
             for (int stride = 0; stride < cellStrides[cellID]; stride++)
             {
-                visualVertices[visualVerticesCount++] = GetCellDynamicVertex(
-                    cellID, meshVisualVertices[cellToVertex[new int2(cellID, stride)]]
+                int vertexIdx = cellToVertex[new int2(cellID, stride)];
+                visualVerticesOffset[visualVerticesCount] = vertexIdx;
+
+                visualVerticesData[visualVerticesCount] = GetCellDynamicVertex(
+                    cellID, meshVisualVertices[vertexIdx]
                 );
+
+                visualVerticesCount++;
             }
 
             // Add a new visual cell wraper
