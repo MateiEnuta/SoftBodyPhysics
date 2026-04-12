@@ -1,3 +1,4 @@
+using System.Collections;
 using SolverStructs;
 using Unity.Burst;
 using Unity.Collections;
@@ -25,23 +26,25 @@ public struct BasicPlaneColJob : IJobParallelFor
     public void Execute(int index)
     {
         LatticeCell currentCell = latticeCells[collisionWrapers[index].cellIdx];
+        Particle p1 = particles[currentCell.v0];
+        Particle p2 = particles[currentCell.v1];
+        Particle p3 = particles[currentCell.v2];
+        Particle p4 = particles[currentCell.v3];
+        Particle p5 = particles[currentCell.v4];
+        Particle p6 = particles[currentCell.v5];
+        Particle p7 = particles[currentCell.v6];
+        Particle p8 = particles[currentCell.v7];
 
         for (int i = collisionWrapers[index].colVertsRange.x; i < collisionWrapers[index].colVertsRange.y; i++)
         {
             int4 tet = s_CellTets[collisionVertices[i].tet];
             float4 bary = collisionVertices[i].bary;
-            tet = new int4(
-                GetCellVertIndex(currentCell, tet.x),
-                GetCellVertIndex(currentCell, tet.y),
-                GetCellVertIndex(currentCell, tet.z),
-                GetCellVertIndex(currentCell, tet.w)
-            );
 
             float3 colParticlePos = 
-                bary.x * particles[tet.x].currentPosition + 
-                bary.y * particles[tet.y].currentPosition +
-                bary.z * particles[tet.z].currentPosition +
-                bary.w * particles[tet.w].currentPosition;
+                bary.x * GetCellVertIndex(tet.x, ref p1, ref p2, ref p3, ref p4, ref p5, ref p6, ref p7, ref p8).currentPosition + 
+                bary.y * GetCellVertIndex(tet.y, ref p1, ref p2, ref p3, ref p4, ref p5, ref p6, ref p7, ref p8).currentPosition +
+                bary.z * GetCellVertIndex(tet.z, ref p1, ref p2, ref p3, ref p4, ref p5, ref p6, ref p7, ref p8).currentPosition +
+                bary.w * GetCellVertIndex(tet.w, ref p1, ref p2, ref p3, ref p4, ref p5, ref p6, ref p7, ref p8).currentPosition;
             if (colParticlePos.y >= yPlanePos) continue;
 
             float3 correction = new float3(0, yPlanePos - colParticlePos.y, 0);
@@ -52,37 +55,36 @@ public struct BasicPlaneColJob : IJobParallelFor
             correction /= denom;
 
             // Update actual particles positions
-            Particle p0 = particles[tet.x];
-            p0.currentPosition += bary.x * correction;
-            particles[tet.x] = p0;
-
-            Particle p1 = particles[tet.y];
-            p1.currentPosition += bary.y * correction;
-            particles[tet.y] = p1;
-
-            Particle p2 = particles[tet.z];
-            p2.currentPosition += bary.z * correction;
-            particles[tet.z] = p2;
-
-            Particle p3 = particles[tet.w];
-            p3.currentPosition += bary.w * correction;
-            particles[tet.w] = p3;
+            GetCellVertIndex(tet.x, ref p1, ref p2, ref p3, ref p4, ref p5, ref p6, ref p7, ref p8).currentPosition += bary.x * correction;
+            GetCellVertIndex(tet.y, ref p1, ref p2, ref p3, ref p4, ref p5, ref p6, ref p7, ref p8).currentPosition += bary.y * correction;
+            GetCellVertIndex(tet.z, ref p1, ref p2, ref p3, ref p4, ref p5, ref p6, ref p7, ref p8).currentPosition += bary.z * correction;
+            GetCellVertIndex(tet.w, ref p1, ref p2, ref p3, ref p4, ref p5, ref p6, ref p7, ref p8).currentPosition += bary.w * correction;
         }
+
+        particles[currentCell.v0] = p1;
+        particles[currentCell.v1] = p2;
+        particles[currentCell.v2] = p3;
+        particles[currentCell.v3] = p4;
+        particles[currentCell.v4] = p5;
+        particles[currentCell.v5] = p6;
+        particles[currentCell.v6] = p7;
+        particles[currentCell.v7] = p8;
     }
 
-    private static int GetCellVertIndex(LatticeCell c, int localIndex)
+    private static ref Particle GetCellVertIndex(int localIndex, ref Particle p1, ref Particle p2, ref Particle p3, 
+        ref Particle p4, ref Particle p5, ref Particle p6, ref Particle p7, ref Particle p8)
     {
         switch (localIndex)
         {
-            case 0: return c.v0;
-            case 1: return c.v1;
-            case 2: return c.v2;
-            case 3: return c.v3;
-            case 4: return c.v4;
-            case 5: return c.v5;
-            case 6: return c.v6;
-            case 7: return c.v7;
-            default: return -1;
+            case 0: return ref p1;
+            case 1: return ref p2;
+            case 2: return ref p3;
+            case 3: return ref p4;
+            case 4: return ref p5;
+            case 5: return ref p6;
+            case 6: return ref p7;
+            case 7: return ref p8;
+            default: return ref p1;
         }
     }
 }

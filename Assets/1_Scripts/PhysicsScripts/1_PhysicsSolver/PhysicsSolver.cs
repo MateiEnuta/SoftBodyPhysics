@@ -102,7 +102,7 @@ public class PhysicsSolver : MonoBehaviour
                 collisionVertices = collisionVertices.AsArray(), collisionWrapers = collisionWrapers.AsArray(),
                 particles = particles.AsArray()
             };
-            handle = basicPlaneColJob.Schedule(collisionWraperCount, 32, handle);
+            handle = basicPlaneColJob.Schedule(collisionWraperCount, 1, handle);
         }
 
         VisVertsUpdateJob visVertsUpdateJob = new VisVertsUpdateJob
@@ -122,6 +122,7 @@ public class PhysicsSolver : MonoBehaviour
             for (int i = body.particlesRange.x; i < body.particlesRange.y; i++) averagePos += particles[i].currentPosition;
             averagePos /= body.particlesRange.y - body.particlesRange.x;
             body.transform.position = averagePos;
+            body.transform.rotation = quaternion.identity;
 
             for (int i = body.visVerticesRange.x; i < body.visVerticesRange.y; i++) visualVertices[i] -= averagePos;
 
