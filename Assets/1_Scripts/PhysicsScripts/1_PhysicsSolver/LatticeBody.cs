@@ -12,9 +12,15 @@ public class LatticeBody : MonoBehaviour
 
     private void Start()
     {
+        Initialize();
+    }
+
+    public void Initialize()
+    {
         visualMesh = GetComponent<MeshFilter>().mesh;
 
         physicsSolver = FindFirstObjectByType<PhysicsSolver>();
+        if (physicsSolver == null) return;
         physicsSolver.ProcessLatticeBody(this);
     }
 }
