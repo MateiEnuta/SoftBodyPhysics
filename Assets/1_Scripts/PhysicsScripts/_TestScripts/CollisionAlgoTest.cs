@@ -15,10 +15,12 @@ public class CollisionAlgoTest : MonoBehaviour
     private List<LatticePreprocessor> preprocessors;
     private List<float3> currentParticles;
     private List<LatticeCell> currentCells;
+    private List<int4> cellCoords;
 
     // Collision test data
-    private List<int2> touchedCells = new List<int2>();
+    private List<int4> touchedCells = new List<int4>();
     private HashSet<int2> collisionPairs = new HashSet<int2>();
+    
 
     private void Awake()
     {
@@ -35,6 +37,8 @@ public class CollisionAlgoTest : MonoBehaviour
         // Populate data lists
         currentParticles = new List<float3>();
         currentCells = new List<LatticeCell>();
+        cellCoords = new List<int4>();
+        int currentBody = 0;
         foreach (var body in preprocessors)
         {
             int initialParticleCount = currentParticles.Count;
@@ -62,10 +66,15 @@ public class CollisionAlgoTest : MonoBehaviour
                 currentCell.v6 += initialParticleCount;
                 currentCell.v7 += initialParticleCount;
                 currentCells.Add(currentCell);
+                cellCoords.Add(new int4(currentBody, body.to3D(body.latticeCellCoords[i])));
             }
+
+            ++currentBody;
         }
     }
 
+
+#region Simulation
     private void Update()
     {
         if (collisionBodies == null || preprocessors == null ||
@@ -88,73 +97,82 @@ public class CollisionAlgoTest : MonoBehaviour
 
         // Run the collision testing algorithm
         touchedCells.Clear();
+        float invCellSize = 1.0f / hashCellSize;
         for (int i = 0; i < currentCells.Count; i++)
         {
-            float3 p0 = currentParticles[currentCells[i].v0];
-            float3 p1 = currentParticles[currentCells[i].v1];
-            float3 p2 = currentParticles[currentCells[i].v2];
-            float3 p3 = currentParticles[currentCells[i].v3];
-            float3 p4 = currentParticles[currentCells[i].v4];
-            float3 p5 = currentParticles[currentCells[i].v5];
-            float3 p6 = currentParticles[currentCells[i].v6];
-            float3 p7 = currentParticles[currentCells[i].v7];
+            var c = currentCells[i];
+            float3 p0 = currentParticles[c.v0];
+            float3 p1 = currentParticles[c.v1];
+            float3 p2 = currentParticles[c.v2];
+            float3 p3 = currentParticles[c.v3];
+            float3 p4 = currentParticles[c.v4];
+            float3 p5 = currentParticles[c.v5];
+            float3 p6 = currentParticles[c.v6];
+            float3 p7 = currentParticles[c.v7];
 
             float3 minPos = min(min(min(p0, p1), min(p2, p3)), min(min(p4, p5), min(p6, p7)));
             float3 maxPos = max(max(max(p0, p1), max(p2, p3)), max(max(p4, p5), max(p6, p7)));
 
-            float invCellSize = 1.0f / hashCellSize;
-
             int3 minCell = (int3)floor(minPos * invCellSize);
             int3 maxCell = (int3)floor(maxPos * invCellSize);
-
-            int HashCell(int3 c)
-            {
-                unchecked
-                {
-                    return c.x * 73856093 ^ c.y * 19349663 ^ c.z * 83492791;
-                }
-            }
 
             for (int z = minCell.z; z <= maxCell.z; z++)
             for (int y = minCell.y; y <= maxCell.y; y++)
             for (int x = minCell.x; x <= maxCell.x; x++)
             {
-                int3 cellCoords = new int3(x, y, z);
-                int cellID = HashCell(cellCoords);
-
-                touchedCells.Add(new int2(cellID, i));
+                touchedCells.Add(new int4(x, y, z, i));
             }
         }
 
-        // Sort based on the cellID's
-        touchedCells.Sort((int2 a, int2 b) => a.x.CompareTo(b.x));
+        // Sort based on the cell coordinates
+        touchedCells.Sort((a, b) =>
+        {
+            int cmp = a.x.CompareTo(b.x);
+            if (cmp != 0) return cmp;
+
+            cmp = a.y.CompareTo(b.y);
+            if (cmp != 0) return cmp;
+
+            return a.z.CompareTo(b.z);
+        });
 
         // Create unique collision pairs
         collisionPairs.Clear();
-        for (int i = 0; i < touchedCells.Count - 1; i++)
-        for (int j = i + 1; j < touchedCells.Count; j++)
+        for (int start = 0; start < touchedCells.Count;)
         {
-            // Go to the next i cell if they are not in the same cell
-            if (touchedCells[i].x != touchedCells[j].x) break;
+            int end = start + 1;
 
-            // Conditions for creating a pair
-            if (touchedCells[i].y == touchedCells[j].y) continue;
-            LatticeCell cellA = currentCells[touchedCells[i].y];
-            LatticeCell cellB = currentCells[touchedCells[j].y];
-
-            bool valid = true;
-            for (int avi = 0; avi < 8; avi++)
-            for (int bvi = 0; bvi < 8; bvi++)
+            while (end < touchedCells.Count &&
+                touchedCells[end].x == touchedCells[start].x &&
+                touchedCells[end].y == touchedCells[start].y &&
+                touchedCells[end].z == touchedCells[start].z)
             {
-                if (GetCellVertex(cellA, avi) == GetCellVertex(cellB, bvi)) valid = false;
+                end++;
             }
-            if (!valid) continue;
 
-            // Create only if they are not the same cells or touching in ascending index order
-            if (touchedCells[i].y < touchedCells[j].y)
-                collisionPairs.Add(new int2(touchedCells[i].y, touchedCells[j].y));
-            else
-                collisionPairs.Add(new int2(touchedCells[j].y, touchedCells[i].y));
+            for (int i = start; i < end - 1; i++)
+            for (int j = i + 1; j < end; j++)
+            {
+                int cellAidx = touchedCells[i].w;
+                int cellBidx = touchedCells[j].w;
+
+                if (cellAidx == cellBidx) continue;
+                LatticeCell cellA = currentCells[cellAidx];
+                LatticeCell cellB = currentCells[cellBidx];
+                if (cellCoords[cellAidx].x == cellCoords[cellBidx].x)
+                {
+                    int3 difference = cellCoords[cellAidx].yzw - cellCoords[cellBidx].yzw;
+                    if (abs(difference.x) <= 1 && abs(difference.y) <= 1 && abs(difference.z) <= 1) continue;
+                }
+
+                // Create only if they are not the same cells or touching in ascending index order
+                if (cellAidx < cellBidx)
+                    collisionPairs.Add(new int2(cellAidx, cellBidx));
+                else
+                    collisionPairs.Add(new int2(cellBidx, cellAidx));
+            }
+
+            start = end;
         }
 
         // Check for collision
@@ -171,6 +189,7 @@ public class CollisionAlgoTest : MonoBehaviour
             Debug.DrawLine(posA, posB, Color.pink, Time.deltaTime);
         }
     }
+#endregion
 
 
     private void OnDrawGizmos()
@@ -204,6 +223,7 @@ public class CollisionAlgoTest : MonoBehaviour
     }
 
 
+#region Helper functions
     static int GetCellVertex(LatticeCell c, int i)
     {
         switch (i)
@@ -303,3 +323,4 @@ public class CollisionAlgoTest : MonoBehaviour
         return true;
     }
 }
+#endregion

@@ -56,6 +56,7 @@ public class LatticePreprocessor
     public float3 latticeDimensions { get; private set; }
     public List<int>     activeParticles { get; private set; }
     public LatticeCell[] finalLatticeCells { get; private set; }
+    public int[]         latticeCellCoords { get; private set; }
     public int[]         chlCount { get; private set; }
     public int[]         cellToColCell { get; private set; }
     public int[]         cellToVisCell { get; private set; }
@@ -526,6 +527,7 @@ public class LatticePreprocessor
 
     // Create final cells
     finalLatticeCells = new LatticeCell[activeCells.Count];
+    latticeCellCoords = new int[activeCells.Count];
     for (int i = 0; i < activeCells.Count; i++)
     {
         LatticeCell newCell = new LatticeCell();
@@ -561,6 +563,7 @@ public class LatticePreprocessor
 
         // Assign the new cell
         finalLatticeCells[i] = newCell;
+        latticeCellCoords[i] = activeCells[i];
     }
 
     // Initialise cell refrences
