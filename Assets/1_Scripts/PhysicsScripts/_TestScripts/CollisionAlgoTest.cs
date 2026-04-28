@@ -4,23 +4,117 @@ using UnityEngine;
 using SolverStructs;
 using Unity.Collections;
 using static Unity.Mathematics.math;
+using Unity.Jobs;
+using Unity.Burst;
+using UnityEngine.XR;
+
+#region Jobs
+[BurstCompile]
+public struct DynamicCellsAABBcount : IJobParallelFor
+{
+    [ReadOnly] public float invCellSize;
+    [ReadOnly] public NativeArray<float3> currentParticles;
+    [ReadOnly] public NativeArray<LatticeCell> currentCells;
+    public NativeArray<int3> dCellAABBmin;
+    public NativeArray<int3> dCellAABBmax;
+    
+    public void Execute(int index)
+    {
+        LatticeCell c = currentCells[index];
+        float3 p0 = currentParticles[c.v0];
+        float3 p1 = currentParticles[c.v1];
+        float3 p2 = currentParticles[c.v2];
+        float3 p3 = currentParticles[c.v3];
+        float3 p4 = currentParticles[c.v4];
+        float3 p5 = currentParticles[c.v5];
+        float3 p6 = currentParticles[c.v6];
+        float3 p7 = currentParticles[c.v7];
+
+        float3 minPos = min(min(min(p0, p1), min(p2, p3)), min(min(p4, p5), min(p6, p7)));
+        float3 maxPos = max(max(max(p0, p1), max(p2, p3)), max(max(p4, p5), max(p6, p7)));
+
+        dCellAABBmin[index] = (int3)floor(minPos * invCellSize);
+        dCellAABBmax[index] = (int3)floor(maxPos * invCellSize);
+    }
+}
+
+[BurstCompile]
+public struct CountAABBentries : IJob
+{
+    [ReadOnly] public NativeArray<int3> dCellAABBmin;
+    [ReadOnly] public NativeArray<int3> dCellAABBmax;
+    public NativeReference<int> totalCount;
+
+    public void Execute()
+    {
+        int total = 0;
+        for (int i = 0; i < dCellAABBmin.Length; i++)
+        {
+            int3 size = dCellAABBmax[i] - dCellAABBmin[i] + 1;
+            total += size.x * size.y * size.z;
+        }
+
+        totalCount.Value = total;
+    }
+}
+
+[BurstCompile]
+public struct AddHashCells : IJobParallelFor
+{
+    [ReadOnly] public NativeArray<int3> dCellAABBmin;
+    [ReadOnly] public NativeArray<int3> dCellAABBmax;
+
+    public NativeList<int4>.ParallelWriter hashCellsEntries;
+    
+    public void Execute(int index)
+    {
+        for (int x = dCellAABBmin[index].x; x <= dCellAABBmax[index].x; ++x)
+        for (int y = dCellAABBmin[index].y; y <= dCellAABBmax[index].y; ++y)
+        for (int z = dCellAABBmin[index].z; z <= dCellAABBmax[index].z; ++z)
+        {
+            hashCellsEntries.AddNoResize(new int4(x, y, z, index));
+        }
+    }
+}
+
+[BurstCompile]
+public struct CellEntryComparer : IComparer<int4>
+{
+    public int Compare(int4 a, int4 b)
+    {
+        int cmp = a.x.CompareTo(b.x);
+        if (cmp != 0) return cmp;
+
+        cmp = a.y.CompareTo(b.y);
+        if (cmp != 0) return cmp;
+
+        return a.z.CompareTo(b.z);
+    }
+}
+#endregion
 
 public class CollisionAlgoTest : MonoBehaviour
 {
+#region Variables
     public List<LatticeBody> collisionBodies;
     public float3 targetLatticeDimensions = new float3(0.5f);
     public float hashCellSize = 1f;
     public bool debugLatticeCells = false;
 
     private List<LatticePreprocessor> preprocessors;
-    private List<float3> currentParticles;
-    private List<LatticeCell> currentCells;
-    private List<int4> cellCoords;
+    private NativeList<float3> currentParticles;
+    private NativeList<LatticeCell> currentCells;
 
     // Collision test data
+    private List<int4> cellCoords;
     private List<int4> touchedCells = new List<int4>();
     private HashSet<int2> collisionPairs = new HashSet<int2>();
-    
+
+    // Parallel collision test data
+    private NativeList<int3> dCellAABBmin;
+    private NativeList<int3> dCellAABBmax;
+    private NativeList<int4> hashCellsEntries;
+#endregion
 
     private void Awake()
     {
@@ -35,13 +129,16 @@ public class CollisionAlgoTest : MonoBehaviour
         }
 
         // Populate data lists
-        currentParticles = new List<float3>();
-        currentCells = new List<LatticeCell>();
+        currentParticles = new NativeList<float3>(Allocator.Persistent);
+        currentCells = new NativeList<LatticeCell>(Allocator.Persistent);
+        dCellAABBmin = new NativeList<int3>(Allocator.Persistent);
+        dCellAABBmax = new NativeList<int3>(Allocator.Persistent);
+        hashCellsEntries = new NativeList<int4>(Allocator.Persistent);
         cellCoords = new List<int4>();
         int currentBody = 0;
         foreach (var body in preprocessors)
         {
-            int initialParticleCount = currentParticles.Count;
+            int initialParticleCount = currentParticles.Length;
             
             for (int i = 0; i < body.activeParticles.Count; i++)
             {
@@ -66,6 +163,8 @@ public class CollisionAlgoTest : MonoBehaviour
                 currentCell.v6 += initialParticleCount;
                 currentCell.v7 += initialParticleCount;
                 currentCells.Add(currentCell);
+                dCellAABBmin.Add(0);
+                dCellAABBmax.Add(0);
                 cellCoords.Add(new int4(currentBody, body.to3D(body.latticeCellCoords[i])));
             }
 
@@ -78,7 +177,7 @@ public class CollisionAlgoTest : MonoBehaviour
     private void Update()
     {
         if (collisionBodies == null || preprocessors == null ||
-            currentParticles == null || currentCells == null) return;
+            !currentParticles.IsCreated || !currentCells.IsCreated) return;
 
         // Update lists
         int pIdx = 0;
@@ -94,11 +193,62 @@ public class CollisionAlgoTest : MonoBehaviour
             currentParticles[pIdx++] = posInWorld;
         }
 
+        // SingleThreadTest();
+        MultiTreadedTest();
+    }
 
-        // Run the collision testing algorithm
+    private void MultiTreadedTest()
+    {
+        JobHandle handle = default;
+        int numberOfCells = currentCells.Length;
+
+        // Calculate the total number of occupied cells
+        float invCellSize = 1.0f / hashCellSize;
+        DynamicCellsAABBcount AABBcount = new DynamicCellsAABBcount
+        {
+            invCellSize = invCellSize, currentParticles = currentParticles.AsArray(),
+            currentCells = currentCells.AsArray(), dCellAABBmin = dCellAABBmin.AsArray(),
+            dCellAABBmax = dCellAABBmax.AsArray()
+        };
+        handle = AABBcount.Schedule(numberOfCells, 16, handle);
+        var totalCountRef = new NativeReference<int>(Allocator.TempJob);
+        CountAABBentries countAABB = new CountAABBentries
+        {
+            totalCount = totalCountRef, dCellAABBmin = dCellAABBmin.AsArray(),
+            dCellAABBmax = dCellAABBmax.AsArray()
+        };
+        handle = countAABB.Schedule(handle);
+        handle.Complete();
+
+
+        // List initialisation
+        if (hashCellsEntries.Capacity < totalCountRef.Value)
+            hashCellsEntries.Capacity = totalCountRef.Value;
+        hashCellsEntries.Clear();
+        Debug.Log(totalCountRef.Value);
+        totalCountRef.Dispose();
+
+
+        // Add and sort entries
+        AddHashCells addHashCells = new AddHashCells
+        {
+            dCellAABBmin = dCellAABBmin.AsArray(), dCellAABBmax = dCellAABBmax.AsArray(),
+            hashCellsEntries = hashCellsEntries.AsParallelWriter()
+        };
+        handle = addHashCells.Schedule(numberOfCells, 8, default);
+        // Sort based on x then y then z.
+        handle = hashCellsEntries.AsDeferredJobArray().SortJob(new CellEntryComparer()).Schedule(handle);
+
+
+        handle.Complete();
+    }
+
+    private void SingleThreadTest()
+    {
+        // Biuld cell AABB
         touchedCells.Clear();
         float invCellSize = 1.0f / hashCellSize;
-        for (int i = 0; i < currentCells.Count; i++)
+        for (int i = 0; i < currentCells.Length; i++)
         {
             var c = currentCells[i];
             float3 p0 = currentParticles[c.v0];
@@ -184,7 +334,7 @@ public class CollisionAlgoTest : MonoBehaviour
             float3 posA = (currentParticles[cellA.v0] + currentParticles[cellA.v7]) * 0.5f;
             float3 posB = (currentParticles[cellB.v0] + currentParticles[cellB.v7]) * 0.5f;
 
-            if (!CellsIntersectSAT(cellA, cellB, currentParticles)) continue;
+            if (!CellsIntersectSAT(cellA, cellB)) continue;
 
             Debug.DrawLine(posA, posB, Color.pink, Time.deltaTime);
         }
@@ -195,7 +345,7 @@ public class CollisionAlgoTest : MonoBehaviour
     private void OnDrawGizmos()
     {
         if (collisionBodies == null || preprocessors == null ||
-            currentParticles == null || currentCells == null) return;
+            !currentParticles.IsCreated || !currentCells.IsCreated) return;
         if (!debugLatticeCells) return;
         // ------particle drawing------
         Gizmos.color = Color.coral;
@@ -224,7 +374,7 @@ public class CollisionAlgoTest : MonoBehaviour
 
 
 #region Helper functions
-    static int GetCellVertex(LatticeCell c, int i)
+    private int GetCellVertex(LatticeCell c, int i)
     {
         switch (i)
         {
@@ -241,13 +391,13 @@ public class CollisionAlgoTest : MonoBehaviour
     // Assumes your cell indexing is box-like and that from vertex 0,
     // vertices 1, 3, and 4 are the 3 adjacent corners.
     // If your lattice indexing differs, just change those 3 picks.
-    static void GetCellVertices(LatticeCell c, List<float3> particles, float3[] v)
+    private void GetCellVertices(LatticeCell c, float3[] v)
     {
         for (int i = 0; i < 8; i++)
-            v[i] = particles[GetCellVertex(c, i)];
+            v[i] = currentParticles[GetCellVertex(c, i)];
     }
 
-    static bool OverlapOnAxis(float3[] a, float3[] b, float3 axis)
+    private bool OverlapOnAxis(float3[] a, float3[] b, float3 axis)
     {
         float lenSq = lengthsq(axis);
         if (lenSq < 1e-8f)
@@ -278,16 +428,15 @@ public class CollisionAlgoTest : MonoBehaviour
         return !(maxA < minB || maxB < minA);
     }
 
-    static bool CellsIntersectSAT(
+    private bool CellsIntersectSAT(
         LatticeCell aCell,
-        LatticeCell bCell,
-        List<float3> particles)
+        LatticeCell bCell)
     {
         float3[] a = new float3[8];
         float3[] b = new float3[8];
 
-        GetCellVertices(aCell, particles, a);
-        GetCellVertices(bCell, particles, b);
+        GetCellVertices(aCell, a);
+        GetCellVertices(bCell, b);
 
         float3 ax = normalize(a[1] - a[0]);
         float3 ay = normalize(a[3] - a[0]);
@@ -321,6 +470,15 @@ public class CollisionAlgoTest : MonoBehaviour
         if (!OverlapOnAxis(a, b, cross(az, bz))) return false;
 
         return true;
+    }
+
+    void OnDestroy()
+    {
+        currentParticles.Dispose();
+        currentCells.Dispose();
+        dCellAABBmin.Dispose();
+        dCellAABBmax.Dispose();
+        hashCellsEntries.Dispose();
     }
 }
 #endregion
