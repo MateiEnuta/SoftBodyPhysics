@@ -10,7 +10,7 @@ using UnityEngine.XR;
 
 #region Jobs
 [BurstCompile]
-public struct DynamicCellsAABBcount : IJobParallelFor
+public struct CellsAABBcount : IJobParallelFor
 {
     [ReadOnly] public float invCellSize;
     [ReadOnly] public NativeArray<float3> currentParticles;
@@ -44,12 +44,14 @@ public struct CountAABBentries : IJob
     [ReadOnly] public NativeArray<int3> dCellAABBmin;
     [ReadOnly] public NativeArray<int3> dCellAABBmax;
     public NativeReference<int> totalCount;
+    public NativeArray<int> cellWriteStart;
 
     public void Execute()
     {
         int total = 0;
         for (int i = 0; i < dCellAABBmin.Length; i++)
         {
+            cellWriteStart[i] = total;
             int3 size = dCellAABBmax[i] - dCellAABBmin[i] + 1;
             total += size.x * size.y * size.z;
         }
@@ -63,16 +65,244 @@ public struct AddHashCells : IJobParallelFor
 {
     [ReadOnly] public NativeArray<int3> dCellAABBmin;
     [ReadOnly] public NativeArray<int3> dCellAABBmax;
-
-    public NativeList<int4>.ParallelWriter hashCellsEntries;
+    [ReadOnly] public NativeArray<int> cellWriteStart;
+    [NativeDisableParallelForRestriction] public NativeArray<int4> hashCellsEntries;
     
     public void Execute(int index)
     {
+        int start = cellWriteStart[index];
         for (int x = dCellAABBmin[index].x; x <= dCellAABBmax[index].x; ++x)
         for (int y = dCellAABBmin[index].y; y <= dCellAABBmax[index].y; ++y)
         for (int z = dCellAABBmin[index].z; z <= dCellAABBmax[index].z; ++z)
         {
-            hashCellsEntries.AddNoResize(new int4(x, y, z, index));
+            hashCellsEntries[start++] = new int4(x, y, z, index);
+        }
+    }
+}
+
+// Replaced by Unity's own sortJob
+[BurstCompile]
+public struct SortHashCellsEntriesInPlaceJob : IJob
+{
+    public NativeArray<int4> values;
+
+    public void Execute()
+    {
+        int n = values.Length;
+        if (n <= 1) return;
+
+        for (int i = n / 2 - 1; i >= 0; --i)
+            SiftDown(i, n);
+
+        for (int end = n - 1; end > 0; --end)
+        {
+            Swap(0, end);
+            SiftDown(0, end);
+        }
+    }
+
+    void SiftDown(int root, int count)
+    {
+        while (true)
+        {
+            int child = root * 2 + 1;
+            if (child >= count) return;
+
+            int swapIndex = root;
+
+            if (Compare(values[swapIndex], values[child]) < 0)
+                swapIndex = child;
+
+            int right = child + 1;
+            if (right < count && Compare(values[swapIndex], values[right]) < 0)
+                swapIndex = right;
+
+            if (swapIndex == root) return;
+
+            Swap(root, swapIndex);
+            root = swapIndex;
+        }
+    }
+
+    void Swap(int a, int b)
+    {
+        int4 tmp = values[a];
+        values[a] = values[b];
+        values[b] = tmp;
+    }
+
+    static int Compare(int4 a, int4 b)
+    {
+        if (a.x != b.x) return a.x < b.x ? -1 : 1;
+        if (a.y != b.y) return a.y < b.y ? -1 : 1;
+        if (a.z != b.z) return a.z < b.z ? -1 : 1;
+        return 0;
+    }
+}
+
+[BurstCompile]
+public struct CountCellRanges : IJob
+{
+    [ReadOnly] public int numberOfEntries;
+    [ReadOnly] public NativeArray<int4> hashCellsEntries;
+    [ReadOnly] public NativeArray<int4> cellGridPosition;
+    public NativeReference<int> totalPossiblePairs;
+    public NativeList<int2> hashCellRanges;
+    public NativeList<int> rangesStart;
+
+    public void Execute()
+    {
+        int possiblePairs = 0;
+
+        for (int start = 0; start < numberOfEntries;)
+        {
+            int end = start + 1;
+            while (end < numberOfEntries &&
+                hashCellsEntries[end].x == hashCellsEntries[start].x &&
+                hashCellsEntries[end].y == hashCellsEntries[start].y &&
+                hashCellsEntries[end].z == hashCellsEntries[start].z)
+                end++;
+
+            int initialPossiblePairs = possiblePairs;
+
+            for (int i = start; i < end - 1; i++)
+            for (int j = i + 1; j < end; j++)
+            {
+                int cellAidx = hashCellsEntries[i].w;
+                int cellBidx = hashCellsEntries[j].w;
+
+                if (cellAidx == cellBidx) continue;
+                int4 cellA = cellGridPosition[cellAidx];
+                int4 cellB = cellGridPosition[cellBidx];
+                if (cellA.x == cellB.x)
+                {
+                    int3 difference = cellA.yzw - cellB.yzw;
+                    if (abs(difference.x) <= 1 && abs(difference.y) <= 1 && abs(difference.z) <= 1) continue;
+                }
+
+                possiblePairs++;
+            }
+
+            if (end - start > 1) 
+            {
+                hashCellRanges.AddNoResize(new int2(start, end));
+                rangesStart.AddNoResize(initialPossiblePairs);
+            }
+            start = end;
+        }
+        totalPossiblePairs.Value = possiblePairs;
+    }
+}
+
+[BurstCompile]
+public struct AddCollisionPairs : IJobParallelFor
+{
+    [ReadOnly] public NativeArray<int4> hashCellsEntries;
+    [ReadOnly] public NativeArray<int4> cellGridPosition;
+    [ReadOnly] public NativeArray<int2> hashCellRanges;
+    [ReadOnly] public NativeArray<int> rangesStart;
+    [NativeDisableParallelForRestriction] public NativeArray<int2> initialColPairs;
+
+    public void Execute(int index)
+    {
+        int start = rangesStart[index];
+        for (int i = hashCellRanges[index].x; i < hashCellRanges[index].y - 1; i++)
+        for (int j = i + 1; j < hashCellRanges[index].y; j++)
+        {
+            int cellAidx = hashCellsEntries[i].w;
+            int cellBidx = hashCellsEntries[j].w;
+
+            if (cellAidx == cellBidx) continue;
+            int4 cellA = cellGridPosition[cellAidx];
+            int4 cellB = cellGridPosition[cellBidx];
+            if (cellA.x == cellB.x)
+            {
+                int3 difference = cellA.yzw - cellB.yzw;
+                if (abs(difference.x) <= 1 && abs(difference.y) <= 1 && abs(difference.z) <= 1) continue;
+            }
+
+            initialColPairs[start++] = cellAidx > cellBidx ? 
+                new int2(cellAidx, cellBidx) : 
+                new int2(cellBidx, cellAidx);
+        }
+    }
+}
+
+// Replaced by Unity's own sortJob
+[BurstCompile]
+public struct SortInitialColPairsInPlaceJob : IJob
+{
+    public NativeArray<int2> values;
+
+    public void Execute()
+    {
+        int n = values.Length;
+        if (n <= 1) return;
+
+        for (int i = n / 2 - 1; i >= 0; --i)
+            SiftDown(i, n);
+
+        for (int end = n - 1; end > 0; --end)
+        {
+            Swap(0, end);
+            SiftDown(0, end);
+        }
+    }
+
+    void SiftDown(int root, int count)
+    {
+        while (true)
+        {
+            int child = root * 2 + 1;
+            if (child >= count) return;
+
+            int swapIndex = root;
+
+            if (Compare(values[swapIndex], values[child]) < 0)
+                swapIndex = child;
+
+            int right = child + 1;
+            if (right < count && Compare(values[swapIndex], values[right]) < 0)
+                swapIndex = right;
+
+            if (swapIndex == root) return;
+
+            Swap(root, swapIndex);
+            root = swapIndex;
+        }
+    }
+
+    void Swap(int a, int b)
+    {
+        int2 tmp = values[a];
+        values[a] = values[b];
+        values[b] = tmp;
+    }
+
+    static int Compare(int2 a, int2 b)
+    {
+        if (a.x != b.x) return a.x < b.x ? -1 : 1;
+        if (a.y != b.y) return a.y < b.y ? -1 : 1;
+        return 0;
+    }
+}
+
+[BurstCompile]
+public struct PairUniquer : IJob
+{
+    [ReadOnly] public NativeArray<int2> initialColPairs;
+    public NativeList<int2> uniqueColPairs;
+
+    public void Execute()
+    {
+        for (int i = 0; i < initialColPairs.Length; i++)
+        {
+            int2 p = initialColPairs[i];
+
+            if (i == 0 || !initialColPairs[i - 1].Equals(p))
+            {
+                uniqueColPairs.AddNoResize(p);
+            }
         }
     }
 }
@@ -91,6 +321,16 @@ public struct CellEntryComparer : IComparer<int4>
         return a.z.CompareTo(b.z);
     }
 }
+
+[BurstCompile]
+public struct PairComparer : IComparer<int2>
+{
+    public int Compare(int2 a, int2 b)
+    {
+        if (a.x != b.x) return a.x.CompareTo(b.x);
+        return a.y.CompareTo(b.y);
+    }
+}
 #endregion
 
 public class CollisionAlgoTest : MonoBehaviour
@@ -102,8 +342,10 @@ public class CollisionAlgoTest : MonoBehaviour
     public bool debugLatticeCells = false;
 
     private List<LatticePreprocessor> preprocessors;
-    private NativeList<float3> currentParticles;
     private NativeList<LatticeCell> currentCells;
+    private NativeList<float3> currentParticles;
+    private List<float3> particleOffsets;
+    private List<Transform> particleTransformRef;
 
     // Collision test data
     private List<int4> cellCoords;
@@ -113,7 +355,13 @@ public class CollisionAlgoTest : MonoBehaviour
     // Parallel collision test data
     private NativeList<int3> dCellAABBmin;
     private NativeList<int3> dCellAABBmax;
+    private NativeList<int> cellWriteStart;
     private NativeList<int4> hashCellsEntries;
+    private NativeList<int2> hashCellRanges;
+    private NativeList<int4> cellGridPosition;
+    private NativeList<int> rangesStart;
+    private NativeList<int2> initialColPairs;
+    private NativeList<int2> uniqueColPairs;
 #endregion
 
     private void Awake()
@@ -130,10 +378,18 @@ public class CollisionAlgoTest : MonoBehaviour
 
         // Populate data lists
         currentParticles = new NativeList<float3>(Allocator.Persistent);
+        particleTransformRef = new List<Transform>();
+        particleOffsets = new List<float3>();
         currentCells = new NativeList<LatticeCell>(Allocator.Persistent);
         dCellAABBmin = new NativeList<int3>(Allocator.Persistent);
         dCellAABBmax = new NativeList<int3>(Allocator.Persistent);
+        cellWriteStart = new NativeList<int>(Allocator.Persistent);
         hashCellsEntries = new NativeList<int4>(Allocator.Persistent);
+        hashCellRanges = new NativeList<int2>(Allocator.Persistent);
+        cellGridPosition = new NativeList<int4>(Allocator.Persistent);
+        rangesStart = new NativeList<int>(Allocator.Persistent);
+        initialColPairs = new NativeList<int2>(Allocator.Persistent);
+        uniqueColPairs = new NativeList<int2>(Allocator.Persistent);
         cellCoords = new List<int4>();
         int currentBody = 0;
         foreach (var body in preprocessors)
@@ -148,6 +404,10 @@ public class CollisionAlgoTest : MonoBehaviour
                 
                 // Transform the position to world space
                 float3 posInWorld = body.latticeBody.transform.TransformPoint(posInLattice);
+
+                float3 offset = posInWorld - (float3)body.latticeBody.transform.position;
+                particleTransformRef.Add(body.latticeBody.transform);
+                particleOffsets.Add(offset);
                 currentParticles.Add(posInWorld);
             }
 
@@ -165,7 +425,9 @@ public class CollisionAlgoTest : MonoBehaviour
                 currentCells.Add(currentCell);
                 dCellAABBmin.Add(0);
                 dCellAABBmax.Add(0);
+                cellWriteStart.Add(0);
                 cellCoords.Add(new int4(currentBody, body.to3D(body.latticeCellCoords[i])));
+                cellGridPosition.Add(new int4(currentBody, body.to3D(body.latticeCellCoords[i])));
             }
 
             ++currentBody;
@@ -179,18 +441,13 @@ public class CollisionAlgoTest : MonoBehaviour
         if (collisionBodies == null || preprocessors == null ||
             !currentParticles.IsCreated || !currentCells.IsCreated) return;
 
-        // Update lists
-        int pIdx = 0;
-        foreach (var body in preprocessors)
-        for (int i = 0; i < body.activeParticles.Count; i++)
+        // Update particle positions
+        for (int i = 0; i < currentParticles.Length; i++)
         {
-            // Calculate the particle position in the lattice
-            int3 particleCoords = body.to3D_Particle(body.activeParticles[i]);
-            float3 posInLattice = body.latticeNegativeCorner + particleCoords * body.latticeDimensions;
-            
-            // Transform the position to world space
-            float3 posInWorld = body.latticeBody.transform.TransformPoint(posInLattice);
-            currentParticles[pIdx++] = posInWorld;
+            float3 pos = particleTransformRef[i].position;
+            pos += (float3)(particleTransformRef[i].rotation * particleOffsets[i]);
+
+            currentParticles[i] = pos;
         }
 
         // SingleThreadTest();
@@ -204,43 +461,110 @@ public class CollisionAlgoTest : MonoBehaviour
 
         // Calculate the total number of occupied cells
         float invCellSize = 1.0f / hashCellSize;
-        DynamicCellsAABBcount AABBcount = new DynamicCellsAABBcount
+        var AABBcount = new CellsAABBcount
         {
-            invCellSize = invCellSize, currentParticles = currentParticles.AsArray(),
-            currentCells = currentCells.AsArray(), dCellAABBmin = dCellAABBmin.AsArray(),
+            invCellSize = invCellSize,
+            currentParticles = currentParticles.AsArray(),
+            currentCells = currentCells.AsArray(),
+            dCellAABBmin = dCellAABBmin.AsArray(),
             dCellAABBmax = dCellAABBmax.AsArray()
         };
         handle = AABBcount.Schedule(numberOfCells, 16, handle);
         var totalCountRef = new NativeReference<int>(Allocator.TempJob);
         CountAABBentries countAABB = new CountAABBentries
         {
-            totalCount = totalCountRef, dCellAABBmin = dCellAABBmin.AsArray(),
-            dCellAABBmax = dCellAABBmax.AsArray()
+            totalCount = totalCountRef, 
+            dCellAABBmin = dCellAABBmin.AsArray(),
+            dCellAABBmax = dCellAABBmax.AsArray(),
+            cellWriteStart = cellWriteStart.AsArray()
         };
         handle = countAABB.Schedule(handle);
         handle.Complete();
 
 
-        // List initialisation
+        // Lists initialisation
         if (hashCellsEntries.Capacity < totalCountRef.Value)
             hashCellsEntries.Capacity = totalCountRef.Value;
-        hashCellsEntries.Clear();
-        Debug.Log(totalCountRef.Value);
-        totalCountRef.Dispose();
+        hashCellsEntries.ResizeUninitialized(totalCountRef.Value);
+        
+        if (hashCellRanges.Capacity < totalCountRef.Value)
+            hashCellRanges.Capacity = totalCountRef.Value;
+        hashCellRanges.Clear();
+        if (rangesStart.Capacity < totalCountRef.Value)
+            rangesStart.Capacity = totalCountRef.Value;
+        rangesStart.Clear();
 
 
         // Add and sort entries
-        AddHashCells addHashCells = new AddHashCells
+        var addHashCells = new AddHashCells
         {
-            dCellAABBmin = dCellAABBmin.AsArray(), dCellAABBmax = dCellAABBmax.AsArray(),
-            hashCellsEntries = hashCellsEntries.AsParallelWriter()
+            dCellAABBmin = dCellAABBmin.AsArray(), 
+            dCellAABBmax = dCellAABBmax.AsArray(),
+            hashCellsEntries = hashCellsEntries.AsArray(),
+            cellWriteStart = cellWriteStart.AsArray()
         };
-        handle = addHashCells.Schedule(numberOfCells, 8, default);
-        // Sort based on x then y then z.
-        handle = hashCellsEntries.AsDeferredJobArray().SortJob(new CellEntryComparer()).Schedule(handle);
+        handle = addHashCells.Schedule(numberOfCells, 4, handle);
+        // Sort pairs by cell
+        // var sortHashJob = new SortHashCellsEntriesInPlaceJob
+        // {
+        //     values = hashCellsEntries.AsDeferredJobArray()
+        // };
+        // handle = sortHashJob.Schedule(handle);
+        handle = hashCellsEntries.AsArray().SortJob(new CellEntryComparer()).Schedule(handle);
 
-
+        var totalPossiblePairs = new NativeReference<int>(Allocator.TempJob);
+        CountCellRanges countCellRanges = new CountCellRanges
+        {
+            numberOfEntries = totalCountRef.Value, 
+            hashCellsEntries = hashCellsEntries.AsDeferredJobArray(),
+            cellGridPosition = cellGridPosition.AsArray(),
+            totalPossiblePairs = totalPossiblePairs,
+            hashCellRanges = hashCellRanges,
+            rangesStart = rangesStart
+        };
+        handle = countCellRanges.Schedule(handle);
         handle.Complete();
+
+
+        if (initialColPairs.Capacity < totalPossiblePairs.Value)
+            initialColPairs.Capacity = totalPossiblePairs.Value;
+        initialColPairs.ResizeUninitialized(totalPossiblePairs.Value);
+
+        if (uniqueColPairs.Capacity < totalPossiblePairs.Value)
+            uniqueColPairs.Capacity = totalPossiblePairs.Value;
+        uniqueColPairs.Clear();
+
+
+        var AddCollisionPairs = new AddCollisionPairs
+        {
+            hashCellsEntries = hashCellsEntries.AsArray(),
+            cellGridPosition = cellGridPosition.AsArray(),
+            hashCellRanges = hashCellRanges.AsArray(),
+            rangesStart = rangesStart.AsArray(),
+            initialColPairs = initialColPairs.AsArray()
+        };
+        handle = AddCollisionPairs.Schedule(totalPossiblePairs.Value, 2, handle);
+        // Sort to make the same pairs be next to each other
+        // var sortPairsJob = new SortInitialColPairsInPlaceJob
+        // {
+        //     values = initialColPairs.AsDeferredJobArray()
+        // };
+        // handle = sortPairsJob.Schedule(handle);
+        handle = initialColPairs.AsArray().SortJob(new PairComparer()).Schedule(handle);
+
+        var PairUniquer = new PairUniquer
+        {
+            initialColPairs = initialColPairs.AsDeferredJobArray(),
+            uniqueColPairs = uniqueColPairs  
+        };
+        handle = PairUniquer.Schedule(handle);
+        handle.Complete();
+
+
+        Debug.Log(totalCountRef.Value + " " + 
+            totalPossiblePairs.Value + " " +  uniqueColPairs.Length);
+        totalCountRef.Dispose();
+        totalPossiblePairs.Dispose();
     }
 
     private void SingleThreadTest()
@@ -478,7 +802,13 @@ public class CollisionAlgoTest : MonoBehaviour
         currentCells.Dispose();
         dCellAABBmin.Dispose();
         dCellAABBmax.Dispose();
+        cellWriteStart.Dispose();
         hashCellsEntries.Dispose();
+        hashCellRanges.Dispose();
+        cellGridPosition.Dispose();
+        rangesStart.Dispose();
+        initialColPairs.Dispose();
+        uniqueColPairs.Dispose();
     }
 }
 #endregion
