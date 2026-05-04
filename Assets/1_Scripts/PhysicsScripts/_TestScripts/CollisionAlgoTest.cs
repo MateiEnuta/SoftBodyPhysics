@@ -71,72 +71,12 @@ public struct AddHashCells : IJobParallelFor
     public void Execute(int index)
     {
         int start = cellWriteStart[index];
-        for (int x = dCellAABBmin[index].x; x <= dCellAABBmax[index].x; ++x)
-        for (int y = dCellAABBmin[index].y; y <= dCellAABBmax[index].y; ++y)
-        for (int z = dCellAABBmin[index].z; z <= dCellAABBmax[index].z; ++z)
+        for (int x = dCellAABBmin[index].x; x <= dCellAABBmax[index].x; x++)
+        for (int y = dCellAABBmin[index].y; y <= dCellAABBmax[index].y; y++)
+        for (int z = dCellAABBmin[index].z; z <= dCellAABBmax[index].z; z++)
         {
             hashCellsEntries[start++] = new int4(x, y, z, index);
         }
-    }
-}
-
-// Replaced by Unity's own sortJob
-[BurstCompile]
-public struct SortHashCellsEntriesInPlaceJob : IJob
-{
-    public NativeArray<int4> values;
-
-    public void Execute()
-    {
-        int n = values.Length;
-        if (n <= 1) return;
-
-        for (int i = n / 2 - 1; i >= 0; --i)
-            SiftDown(i, n);
-
-        for (int end = n - 1; end > 0; --end)
-        {
-            Swap(0, end);
-            SiftDown(0, end);
-        }
-    }
-
-    void SiftDown(int root, int count)
-    {
-        while (true)
-        {
-            int child = root * 2 + 1;
-            if (child >= count) return;
-
-            int swapIndex = root;
-
-            if (Compare(values[swapIndex], values[child]) < 0)
-                swapIndex = child;
-
-            int right = child + 1;
-            if (right < count && Compare(values[swapIndex], values[right]) < 0)
-                swapIndex = right;
-
-            if (swapIndex == root) return;
-
-            Swap(root, swapIndex);
-            root = swapIndex;
-        }
-    }
-
-    void Swap(int a, int b)
-    {
-        int4 tmp = values[a];
-        values[a] = values[b];
-        values[b] = tmp;
-    }
-
-    static int Compare(int4 a, int4 b)
-    {
-        if (a.x != b.x) return a.x < b.x ? -1 : 1;
-        if (a.y != b.y) return a.y < b.y ? -1 : 1;
-        if (a.z != b.z) return a.z < b.z ? -1 : 1;
-        return 0;
     }
 }
 
@@ -225,65 +165,6 @@ public struct AddCollisionPairs : IJobParallelFor
                 new int2(cellAidx, cellBidx) : 
                 new int2(cellBidx, cellAidx);
         }
-    }
-}
-
-// Replaced by Unity's own sortJob
-[BurstCompile]
-public struct SortInitialColPairsInPlaceJob : IJob
-{
-    public NativeArray<int2> values;
-
-    public void Execute()
-    {
-        int n = values.Length;
-        if (n <= 1) return;
-
-        for (int i = n / 2 - 1; i >= 0; --i)
-            SiftDown(i, n);
-
-        for (int end = n - 1; end > 0; --end)
-        {
-            Swap(0, end);
-            SiftDown(0, end);
-        }
-    }
-
-    void SiftDown(int root, int count)
-    {
-        while (true)
-        {
-            int child = root * 2 + 1;
-            if (child >= count) return;
-
-            int swapIndex = root;
-
-            if (Compare(values[swapIndex], values[child]) < 0)
-                swapIndex = child;
-
-            int right = child + 1;
-            if (right < count && Compare(values[swapIndex], values[right]) < 0)
-                swapIndex = right;
-
-            if (swapIndex == root) return;
-
-            Swap(root, swapIndex);
-            root = swapIndex;
-        }
-    }
-
-    void Swap(int a, int b)
-    {
-        int2 tmp = values[a];
-        values[a] = values[b];
-        values[b] = tmp;
-    }
-
-    static int Compare(int2 a, int2 b)
-    {
-        if (a.x != b.x) return a.x < b.x ? -1 : 1;
-        if (a.y != b.y) return a.y < b.y ? -1 : 1;
-        return 0;
     }
 }
 
@@ -505,11 +386,6 @@ public class CollisionAlgoTest : MonoBehaviour
         };
         handle = addHashCells.Schedule(numberOfCells, 4, handle);
         // Sort pairs by cell
-        // var sortHashJob = new SortHashCellsEntriesInPlaceJob
-        // {
-        //     values = hashCellsEntries.AsDeferredJobArray()
-        // };
-        // handle = sortHashJob.Schedule(handle);
         handle = hashCellsEntries.AsArray().SortJob(new CellEntryComparer()).Schedule(handle);
 
         var totalPossiblePairs = new NativeReference<int>(Allocator.TempJob);
@@ -543,13 +419,8 @@ public class CollisionAlgoTest : MonoBehaviour
             rangesStart = rangesStart.AsArray(),
             initialColPairs = initialColPairs.AsArray()
         };
-        handle = AddCollisionPairs.Schedule(totalPossiblePairs.Value, 2, handle);
+        handle = AddCollisionPairs.Schedule(hashCellRanges.Length, 2, handle);
         // Sort to make the same pairs be next to each other
-        // var sortPairsJob = new SortInitialColPairsInPlaceJob
-        // {
-        //     values = initialColPairs.AsDeferredJobArray()
-        // };
-        // handle = sortPairsJob.Schedule(handle);
         handle = initialColPairs.AsArray().SortJob(new PairComparer()).Schedule(handle);
 
         var PairUniquer = new PairUniquer
@@ -561,8 +432,23 @@ public class CollisionAlgoTest : MonoBehaviour
         handle.Complete();
 
 
-        Debug.Log(totalCountRef.Value + " " + 
-            totalPossiblePairs.Value + " " +  uniqueColPairs.Length);
+        // Visually show collisions
+        for (int i = 0; i < uniqueColPairs.Length; i++)
+        {
+            LatticeCell cellA = currentCells[uniqueColPairs[i].x];
+            LatticeCell cellB = currentCells[uniqueColPairs[i].y];
+
+            float3 posA = (currentParticles[cellA.v0] + currentParticles[cellA.v7]) * 0.5f;
+            float3 posB = (currentParticles[cellB.v0] + currentParticles[cellB.v7]) * 0.5f;
+
+            if (!CellsIntersectSAT(cellA, cellB)) continue;
+
+            Debug.DrawLine(posA, posB, Color.pink, Time.deltaTime);
+        }
+
+
+        // Debug.Log(totalCountRef.Value + " " + 
+        //     totalPossiblePairs.Value + " " +  uniqueColPairs.Length);
         totalCountRef.Dispose();
         totalPossiblePairs.Dispose();
     }
