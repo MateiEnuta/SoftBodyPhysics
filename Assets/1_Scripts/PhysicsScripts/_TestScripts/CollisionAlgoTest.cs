@@ -6,7 +6,7 @@ using Unity.Collections;
 using static Unity.Mathematics.math;
 using Unity.Jobs;
 using Unity.Burst;
-using UnityEngine.XR;
+using HelperScripts;
 
 namespace collisionTest
 {
@@ -246,6 +246,7 @@ public class CollisionAlgoTest : MonoBehaviour
     public List<LatticeBody> collisionBodies;
     public float3 targetLatticeDimensions = new float3(0.5f);
     public float hashCellSize = 1f;
+    public int numberOfRadixChunks = 10;
     public bool debugLatticeCells = false;
 
     private List<LatticePreprocessor> preprocessors;
@@ -263,10 +264,15 @@ public class CollisionAlgoTest : MonoBehaviour
     private NativeList<int3> dCellAABBmin;
     private NativeList<int3> dCellAABBmax;
     private NativeList<int> cellWriteStart;
-    private NativeList<HashCellEntry64> hashCellsEntries;
+
+    private NativeList<HashCellEntry64> cellsEntries64;
+    private NativeList<HashCellEntry64> auxCellsEntries64;
+    private NativeArray<int> histograms;
+    private NativeArray<int> histogramsOffsets;
     private NativeList<int2> hashCellRanges;
     private NativeList<int4> cellGridPosition;
     private NativeList<int> rangesStart;
+
     private NativeList<int2> initialColPairs;
     private NativeList<int2> uniqueColPairs;
 #endregion
@@ -286,18 +292,25 @@ public class CollisionAlgoTest : MonoBehaviour
         // Populate data lists
         currentParticles = new NativeList<float3>(Allocator.Persistent);
         particleTransformRef = new List<Transform>();
-        particleOffsets = new List<float3>();
         currentCells = new NativeList<LatticeCell>(Allocator.Persistent);
+        particleOffsets = new List<float3>();
+        cellCoords = new List<int4>();
+
         dCellAABBmin = new NativeList<int3>(Allocator.Persistent);
         dCellAABBmax = new NativeList<int3>(Allocator.Persistent);
         cellWriteStart = new NativeList<int>(Allocator.Persistent);
-        hashCellsEntries = new NativeList<HashCellEntry64>(Allocator.Persistent);
+
+        cellsEntries64 = new NativeList<HashCellEntry64>(Allocator.Persistent);
+        auxCellsEntries64 = new NativeList<HashCellEntry64>(Allocator.Persistent);
+        histograms = new NativeArray<int>(numberOfRadixChunks * 256, Allocator.Persistent);
+        histogramsOffsets = new NativeArray<int>(numberOfRadixChunks * 256, Allocator.Persistent);
         hashCellRanges = new NativeList<int2>(Allocator.Persistent);
         cellGridPosition = new NativeList<int4>(Allocator.Persistent);
         rangesStart = new NativeList<int>(Allocator.Persistent);
+
         initialColPairs = new NativeList<int2>(Allocator.Persistent);
         uniqueColPairs = new NativeList<int2>(Allocator.Persistent);
-        cellCoords = new List<int4>();
+
         int currentBody = 0;
         foreach (var body in preprocessors)
         {
@@ -390,9 +403,12 @@ public class CollisionAlgoTest : MonoBehaviour
 
 
         // Lists initialisation
-        if (hashCellsEntries.Capacity < totalCountRef.Value)
-            hashCellsEntries.Capacity = totalCountRef.Value;
-        hashCellsEntries.ResizeUninitialized(totalCountRef.Value);
+        if (cellsEntries64.Capacity < totalCountRef.Value)
+            cellsEntries64.Capacity = totalCountRef.Value;
+        cellsEntries64.ResizeUninitialized(totalCountRef.Value);
+        if (auxCellsEntries64.Capacity < totalCountRef.Value)
+            auxCellsEntries64.Capacity = totalCountRef.Value;
+        auxCellsEntries64.ResizeUninitialized(totalCountRef.Value);
         
         if (hashCellRanges.Capacity < totalCountRef.Value)
             hashCellRanges.Capacity = totalCountRef.Value;
@@ -407,18 +423,27 @@ public class CollisionAlgoTest : MonoBehaviour
         {
             dCellAABBmin = dCellAABBmin.AsArray(), 
             dCellAABBmax = dCellAABBmax.AsArray(),
-            hashCellsEntries = hashCellsEntries.AsArray(),
+            hashCellsEntries = cellsEntries64.AsArray(),
             cellWriteStart = cellWriteStart.AsArray()
         };
         handle = addHashCells.Schedule(numberOfCells, 4, handle);
         // Sort pairs by cell
-        handle = hashCellsEntries.AsArray().SortJob(new HashCellEntry64Comparer()).Schedule(handle);
+        // handle = cellsEntries64.AsArray().SortJob(new HashCellEntry64Comparer()).Schedule(handle);
+        RadixSorter.SortEntries(
+            ref handle,
+            numberOfRadixChunks,
+            totalCountRef.Value,
+            cellsEntries64,
+            auxCellsEntries64,
+            histograms,
+            histogramsOffsets
+        );
 
         var totalPossiblePairs = new NativeReference<int>(Allocator.TempJob);
         CountCellRanges countCellRanges = new CountCellRanges
         {
             numberOfEntries = totalCountRef.Value, 
-            hashCellsEntries = hashCellsEntries.AsDeferredJobArray(),
+            hashCellsEntries = cellsEntries64.AsDeferredJobArray(),
             cellGridPosition = cellGridPosition.AsArray(),
             totalPossiblePairs = totalPossiblePairs,
             hashCellRanges = hashCellRanges,
@@ -439,7 +464,7 @@ public class CollisionAlgoTest : MonoBehaviour
 
         var AddCollisionPairs = new AddCollisionPairs
         {
-            hashCellsEntries = hashCellsEntries.AsArray(),
+            hashCellsEntries = cellsEntries64.AsArray(),
             cellGridPosition = cellGridPosition.AsArray(),
             hashCellRanges = hashCellRanges.AsArray(),
             rangesStart = rangesStart.AsArray(),
@@ -719,7 +744,10 @@ public class CollisionAlgoTest : MonoBehaviour
         dCellAABBmin.Dispose();
         dCellAABBmax.Dispose();
         cellWriteStart.Dispose();
-        hashCellsEntries.Dispose();
+        cellsEntries64.Dispose();
+        auxCellsEntries64.Dispose();
+        histograms.Dispose();
+        histogramsOffsets.Dispose();
         hashCellRanges.Dispose();
         cellGridPosition.Dispose();
         rangesStart.Dispose();
