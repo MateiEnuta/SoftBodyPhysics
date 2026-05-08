@@ -31,8 +31,8 @@ public struct CellsAABBcount : IJobParallelFor
     [ReadOnly] public float invCellSize;
     [ReadOnly] public NativeArray<float3> currentParticles;
     [ReadOnly] public NativeArray<LatticeCell> currentCells;
-    public NativeArray<int3> dCellAABBmin;
-    public NativeArray<int3> dCellAABBmax;
+    [WriteOnly] public NativeArray<int3> dCellAABBmin;
+    [WriteOnly] public NativeArray<int3> dCellAABBmax;
     
     public void Execute(int index)
     {
@@ -60,7 +60,7 @@ public struct CountAABBentries : IJob
     [ReadOnly] public NativeArray<int3> dCellAABBmin;
     [ReadOnly] public NativeArray<int3> dCellAABBmax;
     public NativeReference<int> totalCount;
-    public NativeArray<int> cellWriteStart;
+    [WriteOnly] public NativeArray<int> cellWriteStart;
 
     public void Execute()
     {
@@ -82,7 +82,7 @@ public struct AddHashCells : IJobParallelFor
     [ReadOnly] public NativeArray<int3> dCellAABBmin;
     [ReadOnly] public NativeArray<int3> dCellAABBmax;
     [ReadOnly] public NativeArray<int> cellWriteStart;
-    [NativeDisableParallelForRestriction] public NativeArray<HashCellEntry64> hashCellsEntries;
+    [NativeDisableParallelForRestriction][WriteOnly] public NativeArray<HashCellEntry64> hashCellsEntries;
     
     public void Execute(int index)
     {
@@ -171,7 +171,7 @@ public struct AddCollisionPairs : IJobParallelFor
     [ReadOnly] public NativeArray<int4> cellGridPosition;
     [ReadOnly] public NativeArray<int2> hashCellRanges;
     [ReadOnly] public NativeArray<int> rangesStart;
-    [NativeDisableParallelForRestriction] public NativeArray<int2> initialColPairs;
+    [NativeDisableParallelForRestriction][WriteOnly] public NativeArray<ulong> initialColPairs;
 
     public void Execute(int index)
     {
@@ -191,9 +191,12 @@ public struct AddCollisionPairs : IJobParallelFor
                 if (abs(difference.x) <= 1 && abs(difference.y) <= 1 && abs(difference.z) <= 1) continue;
             }
 
-            initialColPairs[start++] = cellAidx > cellBidx ? 
-                new int2(cellAidx, cellBidx) : 
-                new int2(cellBidx, cellAidx);
+            int a = min(cellAidx, cellBidx);
+            int b = max(cellAidx, cellBidx);
+
+            ulong pairKey = ((ulong)(uint)a << 32) | (uint)b;
+
+            initialColPairs[start++] = pairKey;
         }
     }
 }
@@ -201,41 +204,33 @@ public struct AddCollisionPairs : IJobParallelFor
 [BurstCompile]
 public struct PairUniquer : IJob
 {
-    [ReadOnly] public NativeArray<int2> initialColPairs;
+    [ReadOnly] public NativeArray<ulong> initialColPairs;
     public NativeList<int2> uniqueColPairs;
 
     public void Execute()
     {
         for (int i = 0; i < initialColPairs.Length; i++)
         {
-            int2 p = initialColPairs[i];
+            ulong p = initialColPairs[i];
 
             if (i == 0 || !initialColPairs[i - 1].Equals(p))
             {
-                uniqueColPairs.AddNoResize(p);
+                int a = (int)(p >> 32);
+                int b = (int)(p & 0xFFFFFFFFUL);
+                uniqueColPairs.AddNoResize(new int2(a, b));
             }
         }
     }
 }
 
 [BurstCompile]
-public struct HashCellEntry64Comparer : IComparer<HashCellEntry64>
+public struct ULongComparer : IComparer<ulong>
 {
-    public int Compare(HashCellEntry64 a, HashCellEntry64 b)
+    public int Compare(ulong a, ulong b)
     {
-        if (a.key < b.key) return -1;
-        if (a.key > b.key) return 1;
+        if (a < b) return -1;
+        if (a > b) return 1;
         return 0;
-    }
-}
-
-[BurstCompile]
-public struct PairComparer : IComparer<int2>
-{
-    public int Compare(int2 a, int2 b)
-    {
-        if (a.x != b.x) return a.x.CompareTo(b.x);
-        return a.y.CompareTo(b.y);
     }
 }
 #endregion
@@ -273,7 +268,8 @@ public class CollisionAlgoTest : MonoBehaviour
     private NativeList<int4> cellGridPosition;
     private NativeList<int> rangesStart;
 
-    private NativeList<int2> initialColPairs;
+    private NativeList<ulong> initialColPairs;
+    private NativeList<ulong> auxInitialColPairs;
     private NativeList<int2> uniqueColPairs;
 #endregion
 
@@ -308,7 +304,8 @@ public class CollisionAlgoTest : MonoBehaviour
         cellGridPosition = new NativeList<int4>(Allocator.Persistent);
         rangesStart = new NativeList<int>(Allocator.Persistent);
 
-        initialColPairs = new NativeList<int2>(Allocator.Persistent);
+        initialColPairs = new NativeList<ulong>(Allocator.Persistent);
+        auxInitialColPairs = new NativeList<ulong>(Allocator.Persistent);
         uniqueColPairs = new NativeList<int2>(Allocator.Persistent);
 
         int currentBody = 0;
@@ -428,8 +425,7 @@ public class CollisionAlgoTest : MonoBehaviour
         };
         handle = addHashCells.Schedule(numberOfCells, 4, handle);
         // Sort pairs by cell
-        // handle = cellsEntries64.AsArray().SortJob(new HashCellEntry64Comparer()).Schedule(handle);
-        RadixSorter.SortEntries(
+        RadixSorter.SortCellEntries(
             ref handle,
             numberOfRadixChunks,
             totalCountRef.Value,
@@ -456,6 +452,9 @@ public class CollisionAlgoTest : MonoBehaviour
         if (initialColPairs.Capacity < totalPossiblePairs.Value)
             initialColPairs.Capacity = totalPossiblePairs.Value;
         initialColPairs.ResizeUninitialized(totalPossiblePairs.Value);
+        if (auxInitialColPairs.Capacity < totalPossiblePairs.Value)
+            auxInitialColPairs.Capacity = totalPossiblePairs.Value;
+        auxInitialColPairs.ResizeUninitialized(totalPossiblePairs.Value);
 
         if (uniqueColPairs.Capacity < totalPossiblePairs.Value)
             uniqueColPairs.Capacity = totalPossiblePairs.Value;
@@ -472,7 +471,18 @@ public class CollisionAlgoTest : MonoBehaviour
         };
         handle = AddCollisionPairs.Schedule(hashCellRanges.Length, 2, handle);
         // Sort to make the same pairs be next to each other
-        handle = initialColPairs.AsArray().SortJob(new PairComparer()).Schedule(handle);
+        if (totalPossiblePairs.Value < 50000)
+            handle = initialColPairs.AsArray().SortJob(new ULongComparer()).Schedule(handle);
+        else
+            RadixSorter.SortPairEntries(
+                ref handle,
+                numberOfRadixChunks,
+                totalPossiblePairs.Value,
+                initialColPairs,
+                auxInitialColPairs,
+                histograms,
+                histogramsOffsets
+            );
 
         var PairUniquer = new PairUniquer
         {
@@ -752,6 +762,7 @@ public class CollisionAlgoTest : MonoBehaviour
         cellGridPosition.Dispose();
         rangesStart.Dispose();
         initialColPairs.Dispose();
+        auxInitialColPairs.Dispose();
         uniqueColPairs.Dispose();
     }
 }

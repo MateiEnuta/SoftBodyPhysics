@@ -9,6 +9,7 @@ namespace HelperScripts
 {
 public static class RadixSorter
 {
+#region Cell ranges sort
     [BurstCompile]
     public struct BuildHistogramsJob : IJobParallelFor
     {
@@ -85,7 +86,7 @@ public static class RadixSorter
         }
     }
 
-    public static void SortEntries(
+    public static void SortCellEntries(
         ref JobHandle handle,
         int numberOfChunks,
         int numberOfCellEntries,
@@ -134,5 +135,110 @@ public static class RadixSorter
             output = aux;
         }
     }
+#endregion
+
+#region Pair sort
+    [BurstCompile]
+    public struct BuildPairHistogramsJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<ulong> pairEntries64;
+        [NativeDisableParallelForRestriction]
+        public NativeArray<int> histograms;
+
+        [ReadOnly] public int shift;
+        [ReadOnly] public int chunkSize;
+
+        public void Execute(int chunkIndex)
+        {
+            int start = chunkIndex * chunkSize;
+            int end = math.min(start + chunkSize, pairEntries64.Length);
+
+            int histBase = chunkIndex * 256;
+
+            for (int i = start; i < end; i++)
+            {
+                int bucket = (int)((pairEntries64[i] >> shift) & 0xFFUL);
+                histograms[histBase + bucket]++;
+            }
+        }
+    }
+
+    [BurstCompile]
+    public struct PopulatePairAuxListJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<ulong> pairEntries64;
+        [NativeDisableParallelForRestriction]
+        [WriteOnly] public NativeArray<ulong> auxPairEntries64;
+        [NativeDisableParallelForRestriction]
+        public NativeArray<int> histogramsOffsets;
+
+        [ReadOnly] public int shift;
+        [ReadOnly] public int chunkSize;
+
+        public void Execute(int chunkIndex)
+        {
+            int start = chunkIndex * chunkSize;
+            int end = math.min(start + chunkSize, pairEntries64.Length);
+
+            int histBase = chunkIndex * 256;
+
+            for (int i = start; i < end; i++)
+            {
+                int bucket = (int)((pairEntries64[i] >> shift) & 0xFFUL);
+                auxPairEntries64[histogramsOffsets[histBase + bucket]++] = pairEntries64[i];
+            }
+        }
+    }
+
+    public static void SortPairEntries(
+        ref JobHandle handle,
+        int numberOfChunks,
+        int numberOfPairs,
+        NativeList<ulong> pairEntries64,
+        NativeList<ulong> auxPairEntries64,
+        NativeArray<int> histograms,
+        NativeArray<int> histogramsOffsets
+    )
+    {
+        int chunkSize = (numberOfPairs + numberOfChunks - 1) / numberOfChunks;
+
+        var input = pairEntries64;
+        var output = auxPairEntries64;
+
+        for (int shift = 0; shift < 64; shift += 8)
+        {
+            var buildHistograms = new BuildPairHistogramsJob
+            {
+                pairEntries64 = input.AsArray(),
+                histograms = histograms,
+                shift = shift,
+                chunkSize = chunkSize
+            };
+            handle = buildHistograms.Schedule(numberOfChunks, 1, handle);
+
+            var calculateOffsets = new CalculateOffsetsJob
+            {
+                histograms = histograms,
+                histogramsOffsets = histogramsOffsets,
+                numberOfChunks = numberOfChunks
+            };
+            handle = calculateOffsets.Schedule(handle);
+
+            var populateAuxList = new PopulatePairAuxListJob
+            {
+                pairEntries64 = input.AsArray(),
+                auxPairEntries64 = output.AsArray(),
+                histogramsOffsets = histogramsOffsets,
+                shift = shift,
+                chunkSize = chunkSize
+            };
+            handle = populateAuxList.Schedule(numberOfChunks, 1, handle);
+
+            var aux = input;
+            input = output;
+            output = aux;
+        }
+    }
+#endregion
 }
 }
