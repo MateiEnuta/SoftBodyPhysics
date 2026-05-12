@@ -59,16 +59,22 @@ public struct CountAABBentries : IJob
 {
     [ReadOnly] public NativeArray<int3> dCellAABBmin;
     [ReadOnly] public NativeArray<int3> dCellAABBmax;
-    public NativeReference<int> totalCount;
+    [WriteOnly] public NativeReference<int> totalCount;
     [WriteOnly] public NativeArray<int> cellWriteStart;
 
     public void Execute()
     {
         int total = 0;
-        for (int i = 0; i < dCellAABBmin.Length; i++)
+        int length = dCellAABBmin.Length;
+
+        for (int i = 0; i < length; i++)
         {
             cellWriteStart[i] = total;
-            int3 size = dCellAABBmax[i] - dCellAABBmin[i] + 1;
+
+            int3 minAabb = dCellAABBmin[i];
+            int3 maxAabb = dCellAABBmax[i];
+            int3 size = maxAabb - minAabb + 1;
+
             total += size.x * size.y * size.z;
         }
 
@@ -82,7 +88,8 @@ public struct AddHashCells : IJobParallelFor
     [ReadOnly] public NativeArray<int3> dCellAABBmin;
     [ReadOnly] public NativeArray<int3> dCellAABBmax;
     [ReadOnly] public NativeArray<int> cellWriteStart;
-    [NativeDisableParallelForRestriction][WriteOnly] public NativeArray<HashCellEntry64> hashCellsEntries;
+    [NativeDisableParallelForRestriction]
+    [WriteOnly] public NativeArray<HashCellEntry64> hashCellsEntries;
     
     public void Execute(int index)
     {
@@ -106,8 +113,8 @@ public struct AddHashCells : IJobParallelFor
 
     static ulong WrapToBits(int value, int bits)
     {
-        int period = 1 << bits;
-        int r = value % period;
+        long period = (long)(1UL << bits);
+        long r = value % period;
         if (r < 0) r += period;
         return (ulong)r;
     }
@@ -119,7 +126,7 @@ public struct CountCellRanges : IJob
     [ReadOnly] public int numberOfEntries;
     [ReadOnly] public NativeArray<HashCellEntry64> hashCellsEntries;
     [ReadOnly] public NativeArray<int4> cellGridPosition;
-    public NativeReference<int> totalPossiblePairs;
+    [WriteOnly] public NativeReference<int> totalPossiblePairs;
     public NativeList<int2> hashCellRanges;
     public NativeList<int> rangesStart;
 
@@ -130,34 +137,41 @@ public struct CountCellRanges : IJob
         for (int start = 0; start < numberOfEntries;)
         {
             int end = start + 1;
-            while (end < numberOfEntries && hashCellsEntries[end].key == hashCellsEntries[start].key)
+            ulong key = hashCellsEntries[start].key;
+            while (end < numberOfEntries && hashCellsEntries[end].key == key)
                 end++;
+
+            if (end - start <= 1)
+            {
+                start = end;
+                continue;
+            }
 
             int initialPossiblePairs = possiblePairs;
 
             for (int i = start; i < end - 1; i++)
-            for (int j = i + 1; j < end; j++)
             {
                 int cellAidx = hashCellsEntries[i].cellIndex;
-                int cellBidx = hashCellsEntries[j].cellIndex;
-
-                if (cellAidx == cellBidx) continue;
                 int4 cellA = cellGridPosition[cellAidx];
-                int4 cellB = cellGridPosition[cellBidx];
-                if (cellA.x == cellB.x)
+
+                for (int j = i + 1; j < end; j++)
                 {
-                    int3 difference = cellA.yzw - cellB.yzw;
-                    if (abs(difference.x) <= 1 && abs(difference.y) <= 1 && abs(difference.z) <= 1) continue;
+                    int cellBidx = hashCellsEntries[j].cellIndex;
+                    int4 cellB = cellGridPosition[cellBidx];
+
+                    if (cellA.x == cellB.x)
+                    {
+                        int3 d = cellA.yzw - cellB.yzw;
+                        if (abs(d.x) <= 1 && abs(d.y) <= 1 && abs(d.z) <= 1) 
+                            continue;
+                    }
+
+                    possiblePairs++;
                 }
-
-                possiblePairs++;
             }
 
-            if (end - start > 1) 
-            {
-                hashCellRanges.AddNoResize(new int2(start, end));
-                rangesStart.AddNoResize(initialPossiblePairs);
-            }
+            hashCellRanges.AddNoResize(new int2(start, end));
+            rangesStart.AddNoResize(initialPossiblePairs);
             start = end;
         }
         totalPossiblePairs.Value = possiblePairs;
@@ -171,32 +185,36 @@ public struct AddCollisionPairs : IJobParallelFor
     [ReadOnly] public NativeArray<int4> cellGridPosition;
     [ReadOnly] public NativeArray<int2> hashCellRanges;
     [ReadOnly] public NativeArray<int> rangesStart;
-    [NativeDisableParallelForRestriction][WriteOnly] public NativeArray<ulong> initialColPairs;
+    [NativeDisableParallelForRestriction]
+    [WriteOnly] public NativeArray<ulong> initialColPairs;
 
     public void Execute(int index)
     {
         int start = rangesStart[index];
+
         for (int i = hashCellRanges[index].x; i < hashCellRanges[index].y - 1; i++)
-        for (int j = i + 1; j < hashCellRanges[index].y; j++)
         {
             int cellAidx = hashCellsEntries[i].cellIndex;
-            int cellBidx = hashCellsEntries[j].cellIndex;
-
-            if (cellAidx == cellBidx) continue;
             int4 cellA = cellGridPosition[cellAidx];
-            int4 cellB = cellGridPosition[cellBidx];
-            if (cellA.x == cellB.x)
+
+            for (int j = i + 1; j < hashCellRanges[index].y; j++)
             {
-                int3 difference = cellA.yzw - cellB.yzw;
-                if (abs(difference.x) <= 1 && abs(difference.y) <= 1 && abs(difference.z) <= 1) continue;
+                int cellBidx = hashCellsEntries[j].cellIndex;
+                int4 cellB = cellGridPosition[cellBidx];
+
+                if (cellA.x == cellB.x)
+                {
+                    int3 d = cellA.yzw - cellB.yzw;
+                    if (abs(d.x) <= 1 && abs(d.y) <= 1 && abs(d.z) <= 1) 
+                        continue;
+                }
+
+                int a = min(cellAidx, cellBidx);
+                int b = max(cellAidx, cellBidx);
+
+                ulong pairKey = ((ulong)(uint)a << 32) | (uint)b;
+                initialColPairs[start++] = pairKey;
             }
-
-            int a = min(cellAidx, cellBidx);
-            int b = max(cellAidx, cellBidx);
-
-            ulong pairKey = ((ulong)(uint)a << 32) | (uint)b;
-
-            initialColPairs[start++] = pairKey;
         }
     }
 }
@@ -276,7 +294,7 @@ public class CollisionAlgoTest : MonoBehaviour
     private void Awake()
     {
         if (collisionBodies == null) return;
-        targetLatticeDimensions = math.max(targetLatticeDimensions, new float3(0.2f));
+        targetLatticeDimensions = max(targetLatticeDimensions, new float3(0.2f));
         preprocessors = new List<LatticePreprocessor>(collisionBodies.Count);
 
         foreach (var body in collisionBodies)
@@ -376,6 +394,9 @@ public class CollisionAlgoTest : MonoBehaviour
         JobHandle handle = default;
         int numberOfCells = currentCells.Length;
 
+        var totalCellCount = new NativeReference<int>(Allocator.TempJob);
+        var totalPossiblePairs = new NativeReference<int>(Allocator.TempJob);
+
         // Calculate the total number of occupied cells
         float invCellSize = 1.0f / hashCellSize;
         var AABBcount = new CellsAABBcount
@@ -386,11 +407,10 @@ public class CollisionAlgoTest : MonoBehaviour
             dCellAABBmin = dCellAABBmin.AsArray(),
             dCellAABBmax = dCellAABBmax.AsArray()
         };
-        handle = AABBcount.Schedule(numberOfCells, 16, handle);
-        var totalCountRef = new NativeReference<int>(Allocator.TempJob);
+        handle = AABBcount.Schedule(numberOfCells, 8, handle);
         CountAABBentries countAABB = new CountAABBentries
         {
-            totalCount = totalCountRef, 
+            totalCount = totalCellCount, 
             dCellAABBmin = dCellAABBmin.AsArray(),
             dCellAABBmax = dCellAABBmax.AsArray(),
             cellWriteStart = cellWriteStart.AsArray()
@@ -400,18 +420,18 @@ public class CollisionAlgoTest : MonoBehaviour
 
 
         // Lists initialisation
-        if (cellsEntries64.Capacity < totalCountRef.Value)
-            cellsEntries64.Capacity = totalCountRef.Value;
-        cellsEntries64.ResizeUninitialized(totalCountRef.Value);
-        if (auxCellsEntries64.Capacity < totalCountRef.Value)
-            auxCellsEntries64.Capacity = totalCountRef.Value;
-        auxCellsEntries64.ResizeUninitialized(totalCountRef.Value);
+        if (cellsEntries64.Capacity < totalCellCount.Value)
+            cellsEntries64.Capacity = totalCellCount.Value;
+        cellsEntries64.ResizeUninitialized(totalCellCount.Value);
+        if (auxCellsEntries64.Capacity < totalCellCount.Value)
+            auxCellsEntries64.Capacity = totalCellCount.Value;
+        auxCellsEntries64.ResizeUninitialized(totalCellCount.Value);
         
-        if (hashCellRanges.Capacity < totalCountRef.Value)
-            hashCellRanges.Capacity = totalCountRef.Value;
+        if (hashCellRanges.Capacity < totalCellCount.Value)
+            hashCellRanges.Capacity = totalCellCount.Value;
         hashCellRanges.Clear();
-        if (rangesStart.Capacity < totalCountRef.Value)
-            rangesStart.Capacity = totalCountRef.Value;
+        if (rangesStart.Capacity < totalCellCount.Value)
+            rangesStart.Capacity = totalCellCount.Value;
         rangesStart.Clear();
 
 
@@ -428,18 +448,17 @@ public class CollisionAlgoTest : MonoBehaviour
         RadixSorter.SortCellEntries(
             ref handle,
             numberOfRadixChunks,
-            totalCountRef.Value,
+            totalCellCount.Value,
             cellsEntries64,
             auxCellsEntries64,
             histograms,
             histogramsOffsets
         );
 
-        var totalPossiblePairs = new NativeReference<int>(Allocator.TempJob);
         CountCellRanges countCellRanges = new CountCellRanges
         {
-            numberOfEntries = totalCountRef.Value, 
-            hashCellsEntries = cellsEntries64.AsDeferredJobArray(),
+            numberOfEntries = totalCellCount.Value, 
+            hashCellsEntries = cellsEntries64.AsArray(),
             cellGridPosition = cellGridPosition.AsArray(),
             totalPossiblePairs = totalPossiblePairs,
             hashCellRanges = hashCellRanges,
@@ -509,12 +528,12 @@ public class CollisionAlgoTest : MonoBehaviour
 
 
         Debug.ClearDeveloperConsole();
-        Debug.Log("Total cell entries: " + totalCountRef.Value + "\n" + 
+        Debug.Log("Total cell entries: " + totalCellCount.Value + "\n" + 
             "Number of initial collisions pairs: " + totalPossiblePairs.Value + "\n" +  
             "Number of unique collision pairs: " + uniqueColPairs.Length);
 
         // Temporary helper values
-        totalCountRef.Dispose();
+        totalCellCount.Dispose();
         totalPossiblePairs.Dispose();
     }
 

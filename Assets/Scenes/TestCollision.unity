@@ -59091,7 +59091,7 @@ MonoBehaviour:
     y: 0.5
     z: 0.5
   hashCellSize: 0.5
-  numberOfRadixChunks: 10
+  numberOfRadixChunks: 20
   debugLatticeCells: 0
 --- !u!4 &921825868
 Transform:
