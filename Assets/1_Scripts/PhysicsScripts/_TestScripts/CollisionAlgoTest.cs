@@ -31,8 +31,8 @@ public struct CellsAABBcount : IJobParallelFor
     [ReadOnly] public float invCellSize;
     [ReadOnly] public NativeArray<float3> currentParticles;
     [ReadOnly] public NativeArray<LatticeCell> currentCells;
-    [WriteOnly] public NativeArray<int3> dCellAABBmin;
-    [WriteOnly] public NativeArray<int3> dCellAABBmax;
+    [WriteOnly] public NativeArray<ulong> dCellAABBmin;
+    [WriteOnly] public NativeArray<uint> dCellAABBspan;
     
     public void Execute(int index)
     {
@@ -49,44 +49,77 @@ public struct CellsAABBcount : IJobParallelFor
         float3 minPos = min(min(min(p0, p1), min(p2, p3)), min(min(p4, p5), min(p6, p7)));
         float3 maxPos = max(max(max(p0, p1), max(p2, p3)), max(max(p4, p5), max(p6, p7)));
 
-        dCellAABBmin[index] = (int3)floor(minPos * invCellSize);
-        dCellAABBmax[index] = (int3)floor(maxPos * invCellSize);
+        int3 minCorner = (int3)floor(minPos * invCellSize);
+        int3 maxCorner = (int3)floor(maxPos * invCellSize);
+
+        dCellAABBmin[index] = PackWrappedLong(minCorner);
+        dCellAABBspan[index] = PackWrappedInt(maxCorner - minCorner + 1);
+    }
+
+    public static uint PackWrappedInt(int3 xyz, int bitsX = 11, int bitsY = 10, int bitsZ = 11)
+    {
+        uint sx = (uint)(xyz.x - 1);
+        uint sy = (uint)(xyz.y - 1);
+        uint sz = (uint)(xyz.z - 1);
+
+        return sx | (sy << bitsX) | (sz << (bitsX + bitsY));
+    }
+
+    public static ulong PackWrappedLong(int3 xyz, int bitsX = 22, int bitsY = 20, int bitsZ = 22)
+    {
+        ulong px = WrapToBits(xyz.x, bitsX);
+        ulong py = WrapToBits(xyz.y, bitsY);
+        ulong pz = WrapToBits(xyz.z, bitsZ);
+
+        return px | (py << bitsX) | (pz << (bitsX + bitsY));
+    }
+
+    static ulong WrapToBits(int value, int bits)
+    {
+        long period = (long)(1UL << bits);
+        long r = value % period;
+        if (r < 0) r += period;
+        return (ulong)r;
     }
 }
 
 [BurstCompile]
 public struct CountAABBentries : IJob
 {
-    [ReadOnly] public NativeArray<int3> dCellAABBmin;
-    [ReadOnly] public NativeArray<int3> dCellAABBmax;
+    [ReadOnly] public NativeArray<uint> dCellAABBspan;
     [WriteOnly] public NativeReference<int> totalCount;
     [WriteOnly] public NativeArray<int> cellWriteStart;
 
     public void Execute()
     {
         int total = 0;
-        int length = dCellAABBmin.Length;
+        int length = dCellAABBspan.Length;
 
         for (int i = 0; i < length; i++)
         {
             cellWriteStart[i] = total;
 
-            int3 minAabb = dCellAABBmin[i];
-            int3 maxAabb = dCellAABBmax[i];
-            int3 size = maxAabb - minAabb + 1;
-
-            total += size.x * size.y * size.z;
+            int3 span = UnpackSpan(dCellAABBspan[i]);
+            total += span.x * span.y * span.z;
         }
 
         totalCount.Value = total;
+    }
+
+    static int3 UnpackSpan(uint span)
+    {
+        int sx = (int)( span         & ((1u << 11) - 1u)) + 1;
+        int sy = (int)((span >> 11)  & ((1u << 10) - 1u)) + 1;
+        int sz = (int)((span >> 21)  & ((1u << 11) - 1u)) + 1;
+        return new int3(sx, sy, sz);
     }
 }
 
 [BurstCompile]
 public struct AddHashCells : IJobParallelFor
 {
-    [ReadOnly] public NativeArray<int3> dCellAABBmin;
-    [ReadOnly] public NativeArray<int3> dCellAABBmax;
+    [ReadOnly] public NativeArray<ulong> dCellAABBmin;
+    [ReadOnly] public NativeArray<uint> dCellAABBspan;
     [ReadOnly] public NativeArray<int> cellWriteStart;
     [NativeDisableParallelForRestriction]
     [WriteOnly] public NativeArray<HashCellEntry64> hashCellsEntries;
@@ -94,12 +127,35 @@ public struct AddHashCells : IJobParallelFor
     public void Execute(int index)
     {
         int start = cellWriteStart[index];
-        for (int x = dCellAABBmin[index].x; x <= dCellAABBmax[index].x; x++)
-        for (int y = dCellAABBmin[index].y; y <= dCellAABBmax[index].y; y++)
-        for (int z = dCellAABBmin[index].z; z <= dCellAABBmax[index].z; z++)
+        int3 span = UnpackSpan(dCellAABBspan[index]);
+        int3 minCorner = UnpackMinCorner(dCellAABBmin[index]);
+
+        for (int dx = 0; dx < span.x; dx++)
+        for (int dy = 0; dy < span.y; dy++)
+        for (int dz = 0; dz < span.z; dz++)
         {
-            hashCellsEntries[start++] = new HashCellEntry64(PackWrapped(x, y, z), index);
+            hashCellsEntries[start++] =
+                new HashCellEntry64(
+                    PackWrapped(minCorner.x + dx, minCorner.y + dy, minCorner.z + dz),
+                    index);
         }
+    }
+
+    static int3 UnpackSpan(uint span)
+    {
+        int sx = (int)( span         & ((1u << 11) - 1u)) + 1;
+        int sy = (int)((span >> 11)  & ((1u << 10) - 1u)) + 1;
+        int sz = (int)((span >> 21)  & ((1u << 11) - 1u)) + 1;
+        return new int3(sx, sy, sz);
+    }
+
+
+    static int3 UnpackMinCorner(ulong minCorner)
+    {
+        int x = (int)( minCorner         & ((1UL << 22) - 1UL));
+        int y = (int)((minCorner >> 22)  & ((1UL << 20) - 1UL));
+        int z = (int)((minCorner >> 42)  & ((1UL << 22) - 1UL));
+        return new int3(x, y, z);
     }
 
     public static ulong PackWrapped(int x, int y, int z, int bitsX = 22, int bitsY = 20, int bitsZ = 22)
@@ -274,8 +330,8 @@ public class CollisionAlgoTest : MonoBehaviour
     private HashSet<int2> collisionPairs = new HashSet<int2>();
 
     // Parallel collision test data
-    private NativeList<int3> dCellAABBmin;
-    private NativeList<int3> dCellAABBmax;
+    private NativeList<ulong> dCellAABBmin;
+    private NativeList<uint> dCellAABBspan;
     private NativeList<int> cellWriteStart;
 
     private NativeList<HashCellEntry64> cellsEntries64;
@@ -310,8 +366,8 @@ public class CollisionAlgoTest : MonoBehaviour
         particleOffsets = new List<float3>();
         cellCoords = new List<int4>();
 
-        dCellAABBmin = new NativeList<int3>(Allocator.Persistent);
-        dCellAABBmax = new NativeList<int3>(Allocator.Persistent);
+        dCellAABBmin = new NativeList<ulong>(Allocator.Persistent);
+        dCellAABBspan = new NativeList<uint>(Allocator.Persistent);
         cellWriteStart = new NativeList<int>(Allocator.Persistent);
 
         cellsEntries64 = new NativeList<HashCellEntry64>(Allocator.Persistent);
@@ -359,7 +415,7 @@ public class CollisionAlgoTest : MonoBehaviour
                 currentCell.v7 += initialParticleCount;
                 currentCells.Add(currentCell);
                 dCellAABBmin.Add(0);
-                dCellAABBmax.Add(0);
+                dCellAABBspan.Add(0);
                 cellWriteStart.Add(0);
                 cellCoords.Add(new int4(currentBody, body.to3D(body.latticeCellCoords[i])));
                 cellGridPosition.Add(new int4(currentBody, body.to3D(body.latticeCellCoords[i])));
@@ -405,14 +461,13 @@ public class CollisionAlgoTest : MonoBehaviour
             currentParticles = currentParticles.AsArray(),
             currentCells = currentCells.AsArray(),
             dCellAABBmin = dCellAABBmin.AsArray(),
-            dCellAABBmax = dCellAABBmax.AsArray()
+            dCellAABBspan = dCellAABBspan.AsArray()
         };
         handle = AABBcount.Schedule(numberOfCells, 8, handle);
         CountAABBentries countAABB = new CountAABBentries
         {
-            totalCount = totalCellCount, 
-            dCellAABBmin = dCellAABBmin.AsArray(),
-            dCellAABBmax = dCellAABBmax.AsArray(),
+            totalCount = totalCellCount,
+            dCellAABBspan = dCellAABBspan.AsArray(),
             cellWriteStart = cellWriteStart.AsArray()
         };
         handle = countAABB.Schedule(handle);
@@ -438,8 +493,8 @@ public class CollisionAlgoTest : MonoBehaviour
         // Add and sort entries
         var addHashCells = new AddHashCells
         {
-            dCellAABBmin = dCellAABBmin.AsArray(), 
-            dCellAABBmax = dCellAABBmax.AsArray(),
+            dCellAABBmin = dCellAABBmin.AsArray(),
+            dCellAABBspan = dCellAABBspan.AsArray(),
             hashCellsEntries = cellsEntries64.AsArray(),
             cellWriteStart = cellWriteStart.AsArray()
         };
@@ -515,6 +570,7 @@ public class CollisionAlgoTest : MonoBehaviour
         // Visually show collisions
         for (int i = 0; i < uniqueColPairs.Length; i++)
         {
+            // Debug.Log(uniqueColPairs[i]);
             LatticeCell cellA = currentCells[uniqueColPairs[i].x];
             LatticeCell cellB = currentCells[uniqueColPairs[i].y];
 
@@ -527,7 +583,6 @@ public class CollisionAlgoTest : MonoBehaviour
         }
 
 
-        Debug.ClearDeveloperConsole();
         Debug.Log("Total cell entries: " + totalCellCount.Value + "\n" + 
             "Number of initial collisions pairs: " + totalPossiblePairs.Value + "\n" +  
             "Number of unique collision pairs: " + uniqueColPairs.Length);
@@ -771,7 +826,7 @@ public class CollisionAlgoTest : MonoBehaviour
         currentParticles.Dispose();
         currentCells.Dispose();
         dCellAABBmin.Dispose();
-        dCellAABBmax.Dispose();
+        dCellAABBspan.Dispose();
         cellWriteStart.Dispose();
         cellsEntries64.Dispose();
         auxCellsEntries64.Dispose();
