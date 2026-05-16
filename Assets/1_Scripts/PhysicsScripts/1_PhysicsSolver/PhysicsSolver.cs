@@ -19,20 +19,23 @@ public class PhysicsSolver : MonoBehaviour
     private bool initialised = false;
 
     // --------------Lattice bodies data--------------
-    private NativeList<float3> bodyLatticeDimensions;
+    private int                numberOfBodies;
+    private NativeList<int2>   bodyParticleResolution;
     private NativeList<float>  bodyDistConsCompliance;
     private NativeList<float>  bodyVolConsCompliance;
+    // Main thread
     private List<BodyWraper>   bodyWrapers;
 
     // --------------Particle data--------------
     private NativeList<Particle>    particles;
+    private NativeList<int>         particleMask;
 
     // --------------Cell data--------------
-    private NativeList<LatticeCell> latticeCells;
-    private NativeList<int>         latticeCellBodyRef;
-    private List<int>               latticeColReferences;
-    private List<int>               latticeVisReferences;
-    private int[]                   globalChlCount;
+    private NativeList<int2> latticeCells;
+    // Main thread
+    private List<int>        latticeColReferences;
+    private List<int>        latticeVisReferences;
+    private int[]            globalChlCount;
 
     // --------------Collision data--------------
     private NativeList<DynamicVertex>   collisionVertices;
@@ -49,88 +52,89 @@ public class PhysicsSolver : MonoBehaviour
 
 #region Simulation
 
-    private void FixedUpdate()
-    {
-        if (!initialised) return;
-        JobHandle handle = default;
-        float dt = Time.fixedDeltaTime / substeps;
+    // private void FixedUpdate()
+    // {
+    //     if (!initialised) return;
+    //     JobHandle handle = default;
+    //     float dt = Time.fixedDeltaTime / substeps;
 
-        int particleCount = particles.Length;
-        int visualWraperCount = visualWrapers.Length;
-        int collisionWraperCount = collisionWrapers.Length;
+    //     int particleCount = particles.Length;
+    //     int visualWraperCount = visualWrapers.Length;
+    //     int collisionWraperCount = collisionWrapers.Length;
 
-        for (int i = 0; i < substeps; i++)
-        {
-            ParticleUpdateJob particleUpdateJob = new ParticleUpdateJob
-            {
-                gravity = gravity,
-                dt = dt, particles = particles.AsArray()  
-            };
-            handle = particleUpdateJob.Schedule(particleCount, 32, handle);
+    //     for (int i = 0; i < substeps; i++)
+    //     {
+    //         ParticleUpdateJob particleUpdateJob = new ParticleUpdateJob
+    //         {
+    //             gravity = gravity,
+    //             dt = dt, particles = particles.AsArray()  
+    //         };
+    //         handle = particleUpdateJob.Schedule(particleCount, 32, handle);
 
-            int channelStart = 0;
-            for (int chl = 0; chl < 8; chl++)
-            {
-                DistConsJob distConsJob = new DistConsJob
-                {
-                    dt = dt, damping = damping, channelStart = channelStart, latticeCells = latticeCells.AsArray(),
-                    latticeCellBodyRef = latticeCellBodyRef.AsArray(), bodyLatticeDimensions = bodyLatticeDimensions.AsArray(),
-                    bodyDistConsCompliance = bodyDistConsCompliance.AsArray(), particles = particles.AsArray()
-                };
-                handle = distConsJob.Schedule(globalChlCount[chl], 1, handle);
+    //         int channelStart = 0;
+    //         for (int chl = 0; chl < 8; chl++)
+    //         {
+    //             DistConsJob distConsJob = new DistConsJob
+    //             {
+    //                 dt = dt, damping = damping, channelStart = channelStart, latticeCells = latticeCells.AsArray(),
+    //                 latticeCellBodyRef = latticeCellBodyRef.AsArray(), bodyLatticeDimensions = bodyLatticeDimensions.AsArray(),
+    //                 bodyDistConsCompliance = bodyDistConsCompliance.AsArray(), particles = particles.AsArray()
+    //             };
+    //             handle = distConsJob.Schedule(globalChlCount[chl], 1, handle);
 
-                channelStart += globalChlCount[chl];
-            }
+    //             channelStart += globalChlCount[chl];
+    //         }
 
-            channelStart = 0;
-            for (int chl = 0; chl < 8; chl++)
-            {
-                VolConsJob volConsJob = new VolConsJob
-                {
-                    dt = dt, damping = damping, channelStart = channelStart, latticeCells = latticeCells.AsArray(),
-                    latticeCellBodyRef = latticeCellBodyRef.AsArray(), bodyLatticeDimensions = bodyLatticeDimensions.AsArray(),
-                    bodyVolConsCompliance = bodyVolConsCompliance.AsArray(), particles = particles.AsArray()
-                };
-                handle = volConsJob.Schedule(globalChlCount[chl], 1, handle);
+    //         channelStart = 0;
+    //         for (int chl = 0; chl < 8; chl++)
+    //         {
+    //             VolConsJob volConsJob = new VolConsJob
+    //             {
+    //                 dt = dt, damping = damping, channelStart = channelStart, latticeCells = latticeCells.AsArray(),
+    //                 latticeCellBodyRef = latticeCellBodyRef.AsArray(), bodyLatticeDimensions = bodyLatticeDimensions.AsArray(),
+    //                 bodyVolConsCompliance = bodyVolConsCompliance.AsArray(), particles = particles.AsArray()
+    //             };
+    //             handle = volConsJob.Schedule(globalChlCount[chl], 1, handle);
 
-                channelStart += globalChlCount[chl];
-            }
+    //             channelStart += globalChlCount[chl];
+    //         }
 
-            BasicPlaneColJob basicPlaneColJob = new BasicPlaneColJob
-            {
-                yPlanePos = 0f, latticeCells = latticeCells.AsArray(),
-                collisionVertices = collisionVertices.AsArray(), collisionWrapers = collisionWrapers.AsArray(),
-                particles = particles.AsArray()
-            };
-            handle = basicPlaneColJob.Schedule(collisionWraperCount, 1, handle);
-        }
+    //         BasicPlaneColJob basicPlaneColJob = new BasicPlaneColJob
+    //         {
+    //             yPlanePos = 0f, latticeCells = latticeCells.AsArray(),
+    //             collisionVertices = collisionVertices.AsArray(), collisionWrapers = collisionWrapers.AsArray(),
+    //             particles = particles.AsArray()
+    //         };
+    //         handle = basicPlaneColJob.Schedule(collisionWraperCount, 4, handle);
+    //         handle.Complete();
+    //     }
 
-        VisVertsUpdateJob visVertsUpdateJob = new VisVertsUpdateJob
-        {
-            particles = particles.AsArray(), latticeCells = latticeCells.AsArray(),
-            visualVerticesData = visualVerticesData.AsArray(), visualVerticesOffset = visualVerticesOffset.AsArray(),
-            visualVertices = visualVertices.AsArray(), visualWrapers = visualWrapers.AsArray()
-        };
-        handle = visVertsUpdateJob.Schedule(visualWraperCount, 1, handle);
-        handle.Complete();
+    //     VisVertsUpdateJob visVertsUpdateJob = new VisVertsUpdateJob
+    //     {
+    //         particles = particles.AsArray(), latticeCells = latticeCells.AsArray(),
+    //         visualVerticesData = visualVerticesData.AsArray(), visualVerticesOffset = visualVerticesOffset.AsArray(),
+    //         visualVertices = visualVertices.AsArray(), visualWrapers = visualWrapers.AsArray()
+    //     };
+    //     handle = visVertsUpdateJob.Schedule(visualWraperCount, 1, handle);
+    //     handle.Complete();
 
-        // Update visuals
-        foreach (var body in bodyWrapers)
-        {
-            // Calculate the average position
-            float3 averagePos = Vector3.zero;
-            for (int i = body.particlesRange.x; i < body.particlesRange.y; i++) averagePos += particles[i].currentPosition;
-            averagePos /= body.particlesRange.y - body.particlesRange.x;
-            body.transform.position = averagePos;
-            body.transform.rotation = quaternion.identity;
+    //     // Update visuals
+    //     foreach (var body in bodyWrapers)
+    //     {
+    //         // Calculate the average position
+    //         float3 averagePos = Vector3.zero;
+    //         for (int i = body.particlesRange.x; i < body.particlesRange.y; i++) averagePos += particles[i].currentPosition;
+    //         averagePos /= body.particlesRange.y - body.particlesRange.x;
+    //         body.transform.position = averagePos;
+    //         body.transform.rotation = quaternion.identity;
 
-            for (int i = body.visVerticesRange.x; i < body.visVerticesRange.y; i++) visualVertices[i] -= averagePos;
+    //         for (int i = body.visVerticesRange.x; i < body.visVerticesRange.y; i++) visualVertices[i] -= averagePos;
 
-            body.visualMesh.SetVertices(visualVertices.AsArray(), body.visVerticesRange.x, body.visVerticesRange.y - body.visVerticesRange.x);
-            body.visualMesh.RecalculateBounds();
-            body.visualMesh.RecalculateNormals();
-        }
-    }
+    //         body.visualMesh.SetVertices(visualVertices.AsArray(), body.visVerticesRange.x, body.visVerticesRange.y - body.visVerticesRange.x);
+    //         body.visualMesh.RecalculateBounds();
+    //         body.visualMesh.RecalculateNormals();
+    //     }
+    // }
 
 #endregion
 
@@ -141,26 +145,32 @@ public class PhysicsSolver : MonoBehaviour
     {
         InitialiseSolver();
         // Generate all lattice data
-        LatticePreprocessor currentProcess = new LatticePreprocessor(latticeBody, targetLatticeDimensions);
-        BodyWraper bodyWraper = new BodyWraper(currentProcess);
+        LatticePreprocessor bodyData = new LatticePreprocessor(latticeBody, targetLatticeDimensions);
 
         // Store initial list lengths
         int initialParticleCount = particles.Length;
+
         int initialColVertCount = collisionVertices.Length;
         int initialColTriCount = collisionTriangles.Length;
         int initialColEdgeCount = collisionEdges.Length;
         int initialColWraperCount = collisionWrapers.Length;
+
         int initialVisVerticesCount = visualVertices.Length;
         int initialVisWrapersCount = visualWrapers.Length;
 
 
         // Add particles
-        float particleInvMass = 1f / (latticeBody.mass / currentProcess.activeParticles.Count);
-        for (int i = 0; i < currentProcess.activeParticles.Count; i++)
+        float particleInvMass = 1f / (latticeBody.mass / bodyData.activeParticlesCount);
+        int totalParticleCount = bodyData.particleResolution.x * 
+            bodyData.particleResolution.y * bodyData.particleResolution.z;
+        // Add all particles, even unused ones
+        for (int i = 0; i < totalParticleCount; i++) particles.Add(new Particle());
+        // Update the used particles using a mask
+        for (int i = 0; i < bodyData.activeParticlesCount; i++)
         {
             // Calculate the particle position in the lattice
-            int3 particleCoords = currentProcess.to3D_Particle(currentProcess.activeParticles[i]);
-            float3 posInLattice = currentProcess.latticeNegativeCorner + particleCoords * currentProcess.latticeDimensions;
+            int3 particleCoords = bodyData.to3D_Particle(bodyData.activeParticlesMask[i]);
+            float3 posInLattice = bodyData.latticeNegativeCorner + particleCoords * targetLatticeDimensions;
             
             // Transform the position to world space
             float3 posInWorld = latticeBody.transform.TransformPoint(posInLattice);
@@ -175,10 +185,10 @@ public class PhysicsSolver : MonoBehaviour
             };
 
             // Add new particle
-            particles.Add(newParticle);
+            int offsetParticleIdx = initialParticleCount + bodyData.activeParticlesMask[i];
+            particleMask.Add(offsetParticleIdx);
+            particles[offsetParticleIdx] = newParticle;
         }
-        // Store particle range
-        bodyWraper.particlesRange = new int2(initialParticleCount, particles.Length);
 
 
         // Add lattice cells
@@ -187,7 +197,7 @@ public class PhysicsSolver : MonoBehaviour
         for (int currentChl = 0; currentChl < 8; currentChl++)
         {
             int existingCount = globalChlCount[currentChl];  // how many cells of this color are already in latticeCells
-            int addCount      = currentProcess.chlCount[currentChl];
+            int addCount      = bodyData.chlCount[currentChl];
             if (addCount == 0)
             {
                 // Skip to next channel, but the insertion position must jump
@@ -198,35 +208,21 @@ public class PhysicsSolver : MonoBehaviour
             // Fill the gap [insertionPos + existingCount .. insertionPos + existingCount + addCount)
             int writeStart = insertionPos + existingCount;
             latticeCells.InsertRange(writeStart, addCount);
-            latticeCellBodyRef.InsertRange(writeStart, addCount);
             latticeColReferences.InsertRange(writeStart, Enumerable.Repeat(-1, addCount));
             latticeVisReferences.InsertRange(writeStart, Enumerable.Repeat(-1, addCount));
 
             for (int i = 0; i < addCount; i++)
             {
-                // Create new cell and offset it's particle references
-                LatticeCell newCell = currentProcess.finalLatticeCells[currentLatticeCell];
-                newCell.v0 += initialParticleCount;
-                newCell.v1 += initialParticleCount;
-                newCell.v2 += initialParticleCount;
-                newCell.v3 += initialParticleCount;
-                newCell.v4 += initialParticleCount;
-                newCell.v5 += initialParticleCount;
-                newCell.v6 += initialParticleCount;
-                newCell.v7 += initialParticleCount;
+                latticeCells[writeStart + i] = new int2(numberOfBodies, 
+                    initialParticleCount + bodyData.finalLatticeCells[currentLatticeCell]);
 
-                latticeCells[writeStart + i] = newCell;
-                latticeCellBodyRef[writeStart + i] = bodyWrapers.Count;
-                if (currentProcess.cellToColCell[currentLatticeCell] != -1)
-                    latticeColReferences[writeStart + i] = currentProcess.cellToColCell[currentLatticeCell] + initialColWraperCount;
-                if (currentProcess.cellToVisCell[currentLatticeCell] != -1)
-                    latticeVisReferences[writeStart + i] = currentProcess.cellToVisCell[currentLatticeCell] + initialVisWrapersCount;
-                // Increment the pre processor lattice index
+                if (bodyData.cellToColCell[currentLatticeCell] != -1)
+                    latticeColReferences[writeStart + i] = bodyData.cellToColCell[currentLatticeCell] + initialColWraperCount;
+                if (bodyData.cellToVisCell[currentLatticeCell] != -1)
+                    latticeVisReferences[writeStart + i] = bodyData.cellToVisCell[currentLatticeCell] + initialVisWrapersCount;
+                
                 currentLatticeCell++;
             }
-
-            // Store lattice channel range
-            bodyWraper.cellRanges[currentChl] = new int2(existingCount, addCount);
 
             // Move insertionPos past this channel’s whole block (old + new)
             insertionPos += existingCount + addCount;
@@ -235,44 +231,37 @@ public class PhysicsSolver : MonoBehaviour
 
 
         // Add collision data
-        for (int i = 0; i < currentProcess.collisionVertices.Count; i++)
-            collisionVertices.Add(currentProcess.collisionVertices[i]);
-        for (int i = 0; i < currentProcess.collisionTriangles.Count; i++)
-            collisionTriangles.Add(currentProcess.collisionTriangles[i] + new int3(initialColVertCount));
-        for (int i = 0; i < currentProcess.collisionEdges.Count; i++)
-            collisionEdges.Add(currentProcess.collisionEdges[i] + new int2(initialColVertCount));
-        for (int i = 0; i < currentProcess.collisionWrapers.Count; i++)
+        for (int i = 0; i < bodyData.collisionVertices.Count; i++)
+            collisionVertices.Add(bodyData.collisionVertices[i]);
+        for (int i = 0; i < bodyData.collisionTriangles.Count; i++)
+            collisionTriangles.Add(bodyData.collisionTriangles[i] + new int3(initialColVertCount));
+        for (int i = 0; i < bodyData.collisionEdges.Count; i++)
+            collisionEdges.Add(bodyData.collisionEdges[i] + new int2(initialColVertCount));
+        for (int i = 0; i < bodyData.collisionWrapers.Count; i++)
             collisionWrapers.Add(new CollisionWraper(
-                currentProcess.collisionWrapers[i], // Copy from the reference to the new wraper
+                bodyData.collisionWrapers[i], // Copy from the reference to the new wraper
                 initialColVertCount, initialColTriCount, initialColEdgeCount
             ));
-        // Store collision data range
-        bodyWraper.colVertsRange = new int2(initialColVertCount, collisionVertices.Length);
-        bodyWraper.colTrisRange = new int2(initialColTriCount, collisionTriangles.Length);
-        bodyWraper.colEdgesRange = new int2(initialColEdgeCount, collisionEdges.Length);
-        bodyWraper.colWrapersRange = new int2(initialColWraperCount, collisionWrapers.Length);
 
         // Add visual data
-        for (int i = 0; i < currentProcess.visualVerticesData.Length; i++)
+        for (int i = 0; i < bodyData.visualVerticesData.Length; i++)
         {
-            visualVerticesData.Add(currentProcess.visualVerticesData[i]);
-            visualVerticesOffset.Add(currentProcess.visualVerticesOffset[i] + initialVisVerticesCount);
+            visualVerticesData.Add(bodyData.visualVerticesData[i]);
+            visualVerticesOffset.Add(bodyData.visualVerticesOffset[i] + initialVisVerticesCount);
             visualVertices.Add(float3.zero);
         }
-        for (int i = 0; i < currentProcess.visualVerticesWrapers.Length; i++)
-            visualWrapers.Add(currentProcess.visualVerticesWrapers[i] + new int3(initialVisVerticesCount));
-        bodyWraper.visVerticesRange = new int2(initialVisVerticesCount, visualVertices.Length);
-        bodyWraper.visWrapersRange = new int2(initialVisWrapersCount, visualWrapers.Length);
+        for (int i = 0; i < bodyData.visualVerticesWrapers.Length; i++)
+            visualWrapers.Add(bodyData.visualVerticesWrapers[i] + new int3(initialVisVerticesCount));
 
 
         // Add the new body wraper and body data
-        bodyWrapers.Add(bodyWraper);
-        bodyLatticeDimensions.Add(currentProcess.latticeDimensions * latticeBody.transform.lossyScale);
+        numberOfBodies++;
+        bodyParticleResolution.Add(bodyData.particleResolution.xy);
         bodyDistConsCompliance.Add(latticeBody.distanceCompliance);
         bodyVolConsCompliance.Add(latticeBody.volumeCompliance);
 
         // Update the cell references
-        UpdateCellVertReferences();
+        UpdateCellReferences();
         // Testing and finally finding that bug [05.03.2026]
         // HashSet<int> used = new HashSet<int>();
         // for (int i = 0; i < latticeColReferences.Count; i++)
@@ -282,7 +271,7 @@ public class PhysicsSolver : MonoBehaviour
         // }
     }
 
-    private void UpdateCellVertReferences()
+    private void UpdateCellReferences()
     {
         for (int i = 0; i < latticeCells.Length; i++)
         {
@@ -307,7 +296,8 @@ public class PhysicsSolver : MonoBehaviour
         initialised = true;
 
         // Body data
-        bodyLatticeDimensions = new NativeList<float3>(Allocator.Persistent);
+        numberOfBodies = 0;
+        bodyParticleResolution = new NativeList<int2>(Allocator.Persistent);
         bodyDistConsCompliance = new NativeList<float>(Allocator.Persistent);
         bodyVolConsCompliance = new NativeList<float>(Allocator.Persistent);
         bodyWrapers = new List<BodyWraper>();
@@ -315,10 +305,10 @@ public class PhysicsSolver : MonoBehaviour
         // Allocate all native lists
         // Particles allocation
         particles = new NativeList<Particle>(Allocator.Persistent);
+        particleMask = new NativeList<int>(Allocator.Persistent);
 
         // Cell data allocation
-        latticeCells = new NativeList<LatticeCell>(Allocator.Persistent);
-        latticeCellBodyRef = new NativeList<int>(Allocator.Persistent);
+        latticeCells = new NativeList<int2>(Allocator.Persistent);
         globalChlCount = new int[8];
         for (int i = 0; i < 8; i++) globalChlCount[i] = 0;
         latticeColReferences = new List<int>();
@@ -340,12 +330,12 @@ public class PhysicsSolver : MonoBehaviour
     private void DisposeLists()
     {
         // Dispose of all native lists
-        if (bodyLatticeDimensions.IsCreated) bodyLatticeDimensions.Dispose();
+        if (bodyParticleResolution.IsCreated) bodyParticleResolution.Dispose();
         if (bodyDistConsCompliance.IsCreated) bodyDistConsCompliance.Dispose();
         if (bodyVolConsCompliance.IsCreated) bodyVolConsCompliance.Dispose();
         if (particles.IsCreated) particles.Dispose();
+        if (particleMask.IsCreated) particleMask.Dispose();
         if (latticeCells.IsCreated) latticeCells.Dispose();
-        if (latticeCellBodyRef.IsCreated) latticeCellBodyRef.Dispose();
         if (collisionVertices.IsCreated) collisionVertices.Dispose();
         if (collisionTriangles.IsCreated) collisionTriangles.Dispose();
         if (collisionEdges.IsCreated) collisionEdges.Dispose();
@@ -402,7 +392,10 @@ public class PhysicsSolver : MonoBehaviour
 
         for (int i = 0; i < latticeCells.Length && debugLatticeCells; i++)
         {
-            LatticeCell cell = latticeCells[i];
+            int2 cell = latticeCells[i];
+            int2 res = bodyParticleResolution[cell.x];
+
+            // Color assigment botch
             int totalCount = 0;
             int channel;
             for (channel = 0; channel < 8; channel++) 
@@ -413,14 +406,14 @@ public class PhysicsSolver : MonoBehaviour
             Gizmos.color = s_ChannelColors[channel];
 
             // Get corner positions
-            float3 p0 = particles[cell.v0].currentPosition;
-            float3 p1 = particles[cell.v1].currentPosition;
-            float3 p2 = particles[cell.v2].currentPosition;
-            float3 p3 = particles[cell.v3].currentPosition;
-            float3 p4 = particles[cell.v4].currentPosition;
-            float3 p5 = particles[cell.v5].currentPosition;
-            float3 p6 = particles[cell.v6].currentPosition;
-            float3 p7 = particles[cell.v7].currentPosition;
+            float3 p0 = particles[cell.y].currentPosition;
+            float3 p1 = particles[cell.y + res.x].currentPosition;
+            float3 p2 = particles[cell.y + res.x * res.y].currentPosition;
+            float3 p3 = particles[cell.y + res.x * res.y + res.x].currentPosition;
+            float3 p4 = particles[cell.y + 1].currentPosition;
+            float3 p5 = particles[cell.y + res.x + 1].currentPosition;
+            float3 p6 = particles[cell.y + res.x * res.y + 1].currentPosition;
+            float3 p7 = particles[cell.y + res.x * res.y + res.x + 1].currentPosition;
 
             // Draw cube edges (12 edges)
             // bottom square
@@ -442,48 +435,48 @@ public class PhysicsSolver : MonoBehaviour
             Gizmos.DrawLine(p3, p7);
         }
 
-        for (int i = 0; i < collisionWrapers.Length && debugColMesh; i++)
-        {
-            LatticeCell cell = latticeCells[collisionWrapers[i].cellIdx];
-            int totalCount = 0;
-            int channel;
-            for (channel = 0; channel < 8; channel++) 
-            {
-                totalCount += globalChlCount[channel];
-                if (collisionWrapers[i].cellIdx < totalCount) break;
-            }
-            Gizmos.color = s_ChannelColors[channel];
+        // for (int i = 0; i < collisionWrapers.Length && debugColMesh; i++)
+        // {
+        //     LatticeCell cell = latticeCells[collisionWrapers[i].cellIdx];
+        //     int totalCount = 0;
+        //     int channel;
+        //     for (channel = 0; channel < 8; channel++) 
+        //     {
+        //         totalCount += globalChlCount[channel];
+        //         if (collisionWrapers[i].cellIdx < totalCount) break;
+        //     }
+        //     Gizmos.color = s_ChannelColors[channel];
 
-            for (int v = collisionWrapers[i].colVertsRange.x; v < collisionWrapers[i].colVertsRange.y; v++)
-            {
-                Gizmos.DrawSphere(GetDynamicVertexPos(cell, collisionVertices[v]), 0.005f);
-            }
+        //     for (int v = collisionWrapers[i].colVertsRange.x; v < collisionWrapers[i].colVertsRange.y; v++)
+        //     {
+        //         Gizmos.DrawSphere(GetDynamicVertexPos(cell, collisionVertices[v]), 0.005f);
+        //     }
 
-            for (int e = collisionWrapers[i].colEdgesRange.x; e < collisionWrapers[i].colEdgesRange.y; e++)
-            {
-                int2 edge = collisionEdges[e];
+        //     for (int e = collisionWrapers[i].colEdgesRange.x; e < collisionWrapers[i].colEdgesRange.y; e++)
+        //     {
+        //         int2 edge = collisionEdges[e];
 
-                Gizmos.DrawLine(GetDynamicVertexPos(cell, collisionVertices[edge.x]), GetDynamicVertexPos(cell, collisionVertices[edge.y]));
-            }
-        }
+        //         Gizmos.DrawLine(GetDynamicVertexPos(cell, collisionVertices[edge.x]), GetDynamicVertexPos(cell, collisionVertices[edge.y]));
+        //     }
+        // }
 
-        for (int i = 0; i < visualWrapers.Length && debugVisVerts; i++)
-        {
-            LatticeCell cell = latticeCells[visualWrapers[i].x];
-            int totalCount = 0;
-            int channel;
-            for (channel = 0; channel < 8; channel++) 
-            {
-                totalCount += globalChlCount[channel];
-                if (visualWrapers[i].x < totalCount) break;
-            }
-            Gizmos.color = s_ChannelColors[channel];
+        // for (int i = 0; i < visualWrapers.Length && debugVisVerts; i++)
+        // {
+        //     LatticeCell cell = latticeCells[visualWrapers[i].x];
+        //     int totalCount = 0;
+        //     int channel;
+        //     for (channel = 0; channel < 8; channel++) 
+        //     {
+        //         totalCount += globalChlCount[channel];
+        //         if (visualWrapers[i].x < totalCount) break;
+        //     }
+        //     Gizmos.color = s_ChannelColors[channel];
 
-            for (int v = visualWrapers[i].y; v < visualWrapers[i].z; v++)
-            {
-                Gizmos.DrawSphere(GetDynamicVertexPos(cell, visualVerticesData[v]), 0.005f);
-            }
-        }
+        //     for (int v = visualWrapers[i].y; v < visualWrapers[i].z; v++)
+        //     {
+        //         Gizmos.DrawSphere(GetDynamicVertexPos(cell, visualVerticesData[v]), 0.005f);
+        //     }
+        // }
     }
 
     float3 GetDynamicVertexPos(LatticeCell cell, DynamicVertex vertex)

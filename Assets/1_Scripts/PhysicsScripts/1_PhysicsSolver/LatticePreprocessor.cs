@@ -34,6 +34,15 @@ readonly struct Vec3Key : IEquatable<Vec3Key>
 [Serializable]
 public class LatticePreprocessor
 {
+    // Lattice cell particle order:
+    // 0: (0,0,0)
+    // 1: (1,0,0)
+    // 2: (0,1,0)
+    // 3: (1,1,0)
+    // 4: (0,0,1)
+    // 5: (1,0,1)
+    // 6: (0,1,1)
+    // 7: (1,1,1)
     static readonly int4[] s_CellTets = new[]
     {
         new int4(0, 3, 6, 5),       // new int4(0, 1, 3, 7),
@@ -48,18 +57,21 @@ public class LatticePreprocessor
     // Helper data
     private int[] latticeCells;
     private List<int> activeCells;
-    private int[] particles;
+    private bool[] activeParticles;
     // Persistent data
     public LatticeBody latticeBody { get; private set; }
     public float3 latticeNegativeCorner { get; private set; }
     public int3 latticeResolution { get; private set; }
     public float3 latticeDimensions { get; private set; }
-    public List<int>     activeParticles { get; private set; }
-    public LatticeCell[] finalLatticeCells { get; private set; }
-    public int[]         latticeCellCoords { get; private set; }
-    public int[]         chlCount { get; private set; }
-    public int[]         cellToColCell { get; private set; }
-    public int[]         cellToVisCell { get; private set; }
+
+    public int[] finalLatticeCells { get; private set; }
+    public int[] chlCount { get; private set; }
+    public int[] cellToColCell { get; private set; }
+    public int[] cellToVisCell { get; private set; }
+
+    public int3 particleResolution { get; private set; }
+    public int activeParticlesCount { get; private set; }
+    public int[] activeParticlesMask { get; private set; }
 
     // --------------Collision data--------------
     // Persistent data
@@ -80,36 +92,30 @@ public class LatticePreprocessor
         if (latticeBody.visualMesh == null) return;
         this.latticeBody = latticeBody;
 
-        // 1) World-space bounds
+        // Calculate bounds
+        latticeDimensions = targetLatticeDimensions;
+        
         Bounds visualMeshBounds = latticeBody.visualMesh.bounds;
         latticeBody.visualMesh.MarkDynamic();
         latticeBody.visualMesh.RecalculateBounds();
         latticeBody.visualMesh.RecalculateNormals();
-        float EPSILON = 1e-4f;
+        const float EPSILON = 1e-4f;
 
         float3 boundsSize = (float3)visualMeshBounds.size
                             + new float3(2 * EPSILON, 2 * EPSILON, 2 * EPSILON);
-        latticeNegativeCorner = (float3)visualMeshBounds.min
-                                - new float3(EPSILON, EPSILON, EPSILON);
+        float3 globalTargetDimensions = targetLatticeDimensions / latticeBody.transform.lossyScale;
 
-        float3 localTargetDimensions = targetLatticeDimensions / latticeBody.transform.lossyScale;
-        float3 safeTarget = new float3(
-            math.max(localTargetDimensions.x, 0.001f),
-            math.max(localTargetDimensions.y, 0.001f),
-            math.max(localTargetDimensions.z, 0.001f));
-
-        // 2) Compute integer cell counts in world space
-        int nx = math.clamp((int)math.round(boundsSize.x / safeTarget.x), 1, 40);
-        int ny = math.clamp((int)math.round(boundsSize.y / safeTarget.y), 1, 40);
-        int nz = math.clamp((int)math.round(boundsSize.z / safeTarget.z), 1, 40);
-
-        // 3) Final lattice data (world-space cell size)
+        int nx =(int)math.ceil(boundsSize.x / globalTargetDimensions.x);
+        int ny =(int)math.ceil(boundsSize.y / globalTargetDimensions.y);
+        int nz =(int)math.ceil(boundsSize.z / globalTargetDimensions.z);
         latticeResolution = new int3(nx, ny, nz);
-        latticeDimensions = new float3(
-            boundsSize.x / nx,
-            boundsSize.y / ny,
-            boundsSize.z / nz
-        );
+
+        float3 finalBoundsSize = targetLatticeDimensions * latticeResolution;
+        float3 boundsDifference = finalBoundsSize - boundsSize;
+        latticeNegativeCorner = (float3)visualMeshBounds.min
+                                - new float3(EPSILON, EPSILON, EPSILON)
+                                - boundsDifference * 0.5f;
+
 
         // Lattice setup
         int maxNumberOfCells = latticeResolution.x * latticeResolution.y * latticeResolution.z;
@@ -117,12 +123,10 @@ public class LatticePreprocessor
         for (int i = 0; i < maxNumberOfCells; i++) latticeCells[i] = -1;
         activeCells = new List<int>(maxNumberOfCells / 2);
         chlCount = new int[8];
-        for (int i = 0; i < 8; i++) chlCount[i] = 0;
-        // Particle setup
-        int maxNumberOfParticles = (latticeResolution.x + 1) * (latticeResolution.y + 1) * (latticeResolution.z + 1);
-        particles = new int[maxNumberOfParticles];
-        for (int i = 0; i < maxNumberOfParticles; i++) particles[i] = -1;
-        activeParticles = new List<int>(maxNumberOfParticles / 2);
+        particleResolution = latticeResolution + 1;
+        int maxNumberOfParticles = particleResolution.x * particleResolution.y * particleResolution.z;
+        activeParticles = new bool[maxNumberOfParticles];
+        activeParticlesCount = 0;
     #endregion
         
 
@@ -469,7 +473,8 @@ public class LatticePreprocessor
 
         // Helper data types
         HashSet<int> edgeHits = new HashSet<int>();
-        Queue<int> cellQueue = new Queue<int>(100);
+        const int maxQueueSize = 1000;
+        Queue<int> cellQueue = new Queue<int>(maxQueueSize);
 
         // Marks every lattice cell as either air or filled
         void FloodFill(bool isOutside)
@@ -485,22 +490,22 @@ public class LatticePreprocessor
                 // Manually add each adjacent cell and verify if it's inside the array
                 // +X
                 int adjCellID = to1D(cellCoords + new int3(1, 0, 0));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 100) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < maxQueueSize) cellQueue.Enqueue(adjCellID);
                 // -X
                 adjCellID = to1D(cellCoords + new int3(-1, 0, 0));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 100) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < maxQueueSize) cellQueue.Enqueue(adjCellID);
                 // +Z
                 adjCellID = to1D(cellCoords + new int3(0, 0, 1));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 100) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < maxQueueSize) cellQueue.Enqueue(adjCellID);
                 // -Z
                 adjCellID = to1D(cellCoords + new int3(0, 0, -1));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 100) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < maxQueueSize) cellQueue.Enqueue(adjCellID);
                 // +Y
                 adjCellID = to1D(cellCoords + new int3(0, 1, 0));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 100) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < maxQueueSize) cellQueue.Enqueue(adjCellID);
                 // -Y
                 adjCellID = to1D(cellCoords + new int3(0, -1, 0));
-                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < 100) cellQueue.Enqueue(adjCellID);
+                if (adjCellID >= 0 && adjCellID < maxNumberOfCells && latticeCells[adjCellID] == -1 && cellQueue.Count < maxQueueSize) cellQueue.Enqueue(adjCellID);
             }
         }
 
@@ -526,45 +531,33 @@ public class LatticePreprocessor
     #region Finalisation
 
     // Create final cells
-    finalLatticeCells = new LatticeCell[activeCells.Count];
-    latticeCellCoords = new int[activeCells.Count];
-    for (int i = 0; i < activeCells.Count; i++)
+    finalLatticeCells = new int[activeCells.Count];
+    int finalCellIdx = 0;
+    for (int chl = 0; chl < 8; chl++)
     {
-        LatticeCell newCell = new LatticeCell();
+        for (int x = chl < 4 ? 0 : 1; x < latticeResolution.x; x+=2)
+        for (int y = chl % 4 < 2 ? 0 : 1; y < latticeResolution.y; y+=2)
+        for (int z = chl % 2; z < latticeResolution.z; z+=2)
+        {
+            int3 currentCellCoords = new int3(x, y, z);
+            int currentCellIdx = to1D(currentCellCoords);
+            if (latticeCells[currentCellIdx] < 0) continue;
 
-        int3 baseCorner = to3D(activeCells[i]);
-        if (latticeCells[activeCells[i]] != i) Debug.Log("wrong");
+            // Point to the newly added cell instead
+            latticeCells[currentCellIdx] = finalCellIdx;
+            chlCount[chl]++;
 
-        // Add each cell corner particle
-        // 0: (0,0,0)
-        int3 currentCorner = baseCorner;
-        newCell.v0 = particles[to1D_Particle(currentCorner)];
-        // 1: (1,0,0)
-        currentCorner = baseCorner + new int3(1, 0, 0);
-        newCell.v1 = particles[to1D_Particle(currentCorner)];
-        // 2: (0,1,0)
-        currentCorner = baseCorner + new int3(0, 1, 0);
-        newCell.v2 = particles[to1D_Particle(currentCorner)];
-        // 3: (1,1,0)
-        currentCorner = baseCorner + new int3(1, 1, 0);
-        newCell.v3 = particles[to1D_Particle(currentCorner)];
-        // 4: (0,0,1)
-        currentCorner = baseCorner + new int3(0, 0, 1);
-        newCell.v4 = particles[to1D_Particle(currentCorner)];
-        // 5: (1,0,1)
-        currentCorner = baseCorner + new int3(1, 0, 1);
-        newCell.v5 = particles[to1D_Particle(currentCorner)];
-        // 6: (0,1,1)
-        currentCorner = baseCorner + new int3(0, 1, 1);
-        newCell.v6 = particles[to1D_Particle(currentCorner)];
-        // 7: (1,1,1)
-        currentCorner = baseCorner + new int3(1, 1, 1);
-        newCell.v7 = particles[to1D_Particle(currentCorner)];
-
-        // Assign the new cell
-        finalLatticeCells[i] = newCell;
-        latticeCellCoords[i] = activeCells[i];
+            // Add the negative corner particle index as the new cell
+            int cornerParticleIdx = to1D_Particle(currentCellCoords);
+            finalLatticeCells[finalCellIdx++] = cornerParticleIdx;
+        }
     }
+
+    // Create the particle mask
+    activeParticlesMask = new int[activeParticlesCount];
+    activeParticlesCount = 0;
+    for (int i = 0; i < maxNumberOfParticles; i++)
+        if (activeParticles[i]) activeParticlesMask[activeParticlesCount++] = i;
 
     // Initialise cell refrences
     cellToColCell = new int[activeCells.Count];
@@ -589,7 +582,7 @@ public class LatticePreprocessor
     // GC final helper data
     latticeCells = null;
     activeCells = null;
-    particles = null;
+    activeParticles = null;
 
     #endregion
     }
@@ -614,13 +607,11 @@ public class LatticePreprocessor
 
     public int to1D_Particle(int3 pos)
     {
-        int3 particleResolution = latticeResolution + new int3(1, 1, 1);
         return (pos.z * particleResolution.x * particleResolution.y) + (pos.y * particleResolution.x) + pos.x;
     }
 
     public int3 to3D_Particle(int idx)
     {
-        int3 particleResolution = latticeResolution + new int3(1, 1, 1);
         int3 result = int3.zero;
         result.z = idx / (particleResolution.x * particleResolution.y);
         idx -= result.z * particleResolution.x * particleResolution.y;
@@ -633,53 +624,35 @@ public class LatticePreprocessor
     private void AddCell(int cellID)
     {
         if (latticeCells[cellID] != -1) return;
-        int3 baseCorner = to3D(cellID);
+        latticeCells[cellID] = activeCells.Count;
+        activeCells.Add(cellID);
 
-        // Determine cell channel
-        int chl = baseCorner.x%2 + baseCorner.y%2 * 2 + baseCorner.z%2 * 4;
-        chlCount[chl]++;
-        // Calculate the position using the previous channel counts
-        int newCellPos = 0;
-        for (int i = 0; i < chl; i++) newCellPos += chlCount[i];
-        // Go through each lattice cell after the newly inseted cell and increase the reference
-        for (int i = newCellPos; i < activeCells.Count; i++) latticeCells[activeCells[i]]++;
-        activeCells.Insert(newCellPos, cellID);
-        latticeCells[cellID] = newCellPos;
+        // Activate particles
+        int3 cellCorner = to3D(cellID);
 
-        // Add each cell corner particle
-        // 0: (0,0,0)
-        int3 currentCorner = baseCorner;
-        ActivateParticle(currentCorner);
-        // 1: (1,0,0)
-        currentCorner = baseCorner + new int3(1, 0, 0);
-        ActivateParticle(currentCorner);
-        // 2: (0,1,0)
-        currentCorner = baseCorner + new int3(0, 1, 0);
-        ActivateParticle(currentCorner);
-        // 3: (1,1,0)
-        currentCorner = baseCorner + new int3(1, 1, 0);
-        ActivateParticle(currentCorner);
-        // 4: (0,0,1)
-        currentCorner = baseCorner + new int3(0, 0, 1);
-        ActivateParticle(currentCorner);
-        // 5: (1,0,1)
-        currentCorner = baseCorner + new int3(1, 0, 1);
-        ActivateParticle(currentCorner);
-        // 6: (0,1,1)
-        currentCorner = baseCorner + new int3(0, 1, 1);
-        ActivateParticle(currentCorner);
-        // 7: (1,1,1)
-        currentCorner = baseCorner + new int3(1, 1, 1);
-        ActivateParticle(currentCorner);
+        AddParticle(cellCorner);
+        int3 offset1 = new int3(1, 0, 0);
+        AddParticle(cellCorner + offset1);
+        int3 offset2 = new int3(0, 1, 0);
+        AddParticle(cellCorner + offset2);
+        int3 offset3 = new int3(1, 1, 0);
+        AddParticle(cellCorner + offset3);
+        int3 offset4 = new int3(0, 0, 1);
+        AddParticle(cellCorner + offset4);
+        int3 offset5 = new int3(1, 0, 1);
+        AddParticle(cellCorner + offset5);
+        int3 offset6 = new int3(0, 1, 1);
+        AddParticle(cellCorner + offset6);
+        int3 offset7 = new int3(1, 1, 1);
+        AddParticle(cellCorner + offset7);
     }
 
-    private void ActivateParticle(int3 currentCorner)
+    private void AddParticle(int3 pos)
     {
-        int particleID = to1D_Particle(currentCorner);
-        if (particles[particleID] == -1)
+        if (activeParticles[to1D_Particle(pos)] == false)
         {
-            particles[particleID] = activeParticles.Count;
-            activeParticles.Add(particleID);
+            activeParticlesCount++;
+            activeParticles[to1D_Particle(pos)] = true;
         }
     }
 

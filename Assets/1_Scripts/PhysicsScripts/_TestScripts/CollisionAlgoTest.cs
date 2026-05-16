@@ -347,83 +347,83 @@ public class CollisionAlgoTest : MonoBehaviour
     private NativeList<int2> uniqueColPairs;
 #endregion
 
-    private void Awake()
-    {
-        if (collisionBodies == null) return;
-        targetLatticeDimensions = max(targetLatticeDimensions, new float3(0.2f));
-        preprocessors = new List<LatticePreprocessor>(collisionBodies.Count);
+    // private void Awake()
+    // {
+    //     if (collisionBodies == null) return;
+    //     targetLatticeDimensions = max(targetLatticeDimensions, new float3(0.2f));
+    //     preprocessors = new List<LatticePreprocessor>(collisionBodies.Count);
 
-        foreach (var body in collisionBodies)
-        {
-            body.Initialize();
-            preprocessors.Add(new LatticePreprocessor(body, targetLatticeDimensions));
-        }
+    //     foreach (var body in collisionBodies)
+    //     {
+    //         body.Initialize();
+    //         preprocessors.Add(new LatticePreprocessor(body, targetLatticeDimensions));
+    //     }
 
-        // Populate data lists
-        currentParticles = new NativeList<float3>(Allocator.Persistent);
-        particleTransformRef = new List<Transform>();
-        currentCells = new NativeList<LatticeCell>(Allocator.Persistent);
-        particleOffsets = new List<float3>();
-        cellCoords = new List<int4>();
+    //     // Populate data lists
+    //     currentParticles = new NativeList<float3>(Allocator.Persistent);
+    //     particleTransformRef = new List<Transform>();
+    //     currentCells = new NativeList<LatticeCell>(Allocator.Persistent);
+    //     particleOffsets = new List<float3>();
+    //     cellCoords = new List<int4>();
 
-        dCellAABBmin = new NativeList<ulong>(Allocator.Persistent);
-        dCellAABBspan = new NativeList<uint>(Allocator.Persistent);
-        cellWriteStart = new NativeList<int>(Allocator.Persistent);
+    //     dCellAABBmin = new NativeList<ulong>(Allocator.Persistent);
+    //     dCellAABBspan = new NativeList<uint>(Allocator.Persistent);
+    //     cellWriteStart = new NativeList<int>(Allocator.Persistent);
 
-        cellsEntries64 = new NativeList<HashCellEntry64>(Allocator.Persistent);
-        auxCellsEntries64 = new NativeList<HashCellEntry64>(Allocator.Persistent);
-        histograms = new NativeArray<int>(numberOfRadixChunks * 256, Allocator.Persistent);
-        histogramsOffsets = new NativeArray<int>(numberOfRadixChunks * 256, Allocator.Persistent);
-        hashCellRanges = new NativeList<int2>(Allocator.Persistent);
-        cellGridPosition = new NativeList<int4>(Allocator.Persistent);
-        rangesStart = new NativeList<int>(Allocator.Persistent);
+    //     cellsEntries64 = new NativeList<HashCellEntry64>(Allocator.Persistent);
+    //     auxCellsEntries64 = new NativeList<HashCellEntry64>(Allocator.Persistent);
+    //     histograms = new NativeArray<int>(numberOfRadixChunks * 256, Allocator.Persistent);
+    //     histogramsOffsets = new NativeArray<int>(numberOfRadixChunks * 256, Allocator.Persistent);
+    //     hashCellRanges = new NativeList<int2>(Allocator.Persistent);
+    //     cellGridPosition = new NativeList<int4>(Allocator.Persistent);
+    //     rangesStart = new NativeList<int>(Allocator.Persistent);
 
-        initialColPairs = new NativeList<ulong>(Allocator.Persistent);
-        auxInitialColPairs = new NativeList<ulong>(Allocator.Persistent);
-        uniqueColPairs = new NativeList<int2>(Allocator.Persistent);
+    //     initialColPairs = new NativeList<ulong>(Allocator.Persistent);
+    //     auxInitialColPairs = new NativeList<ulong>(Allocator.Persistent);
+    //     uniqueColPairs = new NativeList<int2>(Allocator.Persistent);
 
-        int currentBody = 0;
-        foreach (var body in preprocessors)
-        {
-            int initialParticleCount = currentParticles.Length;
+    //     int currentBody = 0;
+    //     foreach (var body in preprocessors)
+    //     {
+    //         int initialParticleCount = currentParticles.Length;
             
-            for (int i = 0; i < body.activeParticles.Count; i++)
-            {
-                // Calculate the particle position in the lattice
-                int3 particleCoords = body.to3D_Particle(body.activeParticles[i]);
-                float3 posInLattice = body.latticeNegativeCorner + particleCoords * body.latticeDimensions;
+    //         for (int i = 0; i < body.activeParticles.Count; i++)
+    //         {
+    //             // Calculate the particle position in the lattice
+    //             int3 particleCoords = body.to3D_Particle(body.activeParticles[i]);
+    //             float3 posInLattice = body.latticeNegativeCorner + particleCoords * body.latticeDimensions;
                 
-                // Transform the position to world space
-                float3 posInWorld = body.latticeBody.transform.TransformPoint(posInLattice);
+    //             // Transform the position to world space
+    //             float3 posInWorld = body.latticeBody.transform.TransformPoint(posInLattice);
 
-                float3 offset = posInWorld - (float3)body.latticeBody.transform.position;
-                particleTransformRef.Add(body.latticeBody.transform);
-                particleOffsets.Add(offset);
-                currentParticles.Add(posInWorld);
-            }
+    //             float3 offset = posInWorld - (float3)body.latticeBody.transform.position;
+    //             particleTransformRef.Add(body.latticeBody.transform);
+    //             particleOffsets.Add(offset);
+    //             currentParticles.Add(posInWorld);
+    //         }
 
-            for (int i = 0; i < body.finalLatticeCells.Length; i++)
-            {
-                LatticeCell currentCell = body.finalLatticeCells[i];
-                currentCell.v0 += initialParticleCount;
-                currentCell.v1 += initialParticleCount;
-                currentCell.v2 += initialParticleCount;
-                currentCell.v3 += initialParticleCount;
-                currentCell.v4 += initialParticleCount;
-                currentCell.v5 += initialParticleCount;
-                currentCell.v6 += initialParticleCount;
-                currentCell.v7 += initialParticleCount;
-                currentCells.Add(currentCell);
-                dCellAABBmin.Add(0);
-                dCellAABBspan.Add(0);
-                cellWriteStart.Add(0);
-                cellCoords.Add(new int4(currentBody, body.to3D(body.latticeCellCoords[i])));
-                cellGridPosition.Add(new int4(currentBody, body.to3D(body.latticeCellCoords[i])));
-            }
+    //         for (int i = 0; i < body.finalLatticeCells.Length; i++)
+    //         {
+    //             LatticeCell currentCell = body.finalLatticeCells[i];
+    //             currentCell.v0 += initialParticleCount;
+    //             currentCell.v1 += initialParticleCount;
+    //             currentCell.v2 += initialParticleCount;
+    //             currentCell.v3 += initialParticleCount;
+    //             currentCell.v4 += initialParticleCount;
+    //             currentCell.v5 += initialParticleCount;
+    //             currentCell.v6 += initialParticleCount;
+    //             currentCell.v7 += initialParticleCount;
+    //             currentCells.Add(currentCell);
+    //             dCellAABBmin.Add(0);
+    //             dCellAABBspan.Add(0);
+    //             cellWriteStart.Add(0);
+    //             cellCoords.Add(new int4(currentBody, body.to3D(body.latticeCellCoords[i])));
+    //             cellGridPosition.Add(new int4(currentBody, body.to3D(body.latticeCellCoords[i])));
+    //         }
 
-            ++currentBody;
-        }
-    }
+    //         ++currentBody;
+    //     }
+    // }
 
 
 #region Simulation

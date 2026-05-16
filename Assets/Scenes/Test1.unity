@@ -3045,7 +3045,7 @@ MonoBehaviour:
     y: -9.81
     z: 0
   damping: 0
-  debugLatticeCells: 0
+  debugLatticeCells: 1
   debugColMesh: 0
   debugVisVerts: 0
 --- !u!4 &1625525668
