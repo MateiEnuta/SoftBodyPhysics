@@ -93,8 +93,6 @@ public class LatticePreprocessor
         this.latticeBody = latticeBody;
 
         // Calculate bounds
-        latticeDimensions = targetLatticeDimensions;
-        
         Bounds visualMeshBounds = latticeBody.visualMesh.bounds;
         latticeBody.visualMesh.MarkDynamic();
         latticeBody.visualMesh.RecalculateBounds();
@@ -103,14 +101,14 @@ public class LatticePreprocessor
 
         float3 boundsSize = (float3)visualMeshBounds.size
                             + new float3(2 * EPSILON, 2 * EPSILON, 2 * EPSILON);
-        float3 globalTargetDimensions = targetLatticeDimensions / latticeBody.transform.lossyScale;
+        latticeDimensions = targetLatticeDimensions / latticeBody.transform.lossyScale;
 
-        int nx =(int)math.ceil(boundsSize.x / globalTargetDimensions.x);
-        int ny =(int)math.ceil(boundsSize.y / globalTargetDimensions.y);
-        int nz =(int)math.ceil(boundsSize.z / globalTargetDimensions.z);
+        int nx =(int)math.ceil(boundsSize.x / latticeDimensions.x);
+        int ny =(int)math.ceil(boundsSize.y / latticeDimensions.y);
+        int nz =(int)math.ceil(boundsSize.z / latticeDimensions.z);
         latticeResolution = new int3(nx, ny, nz);
 
-        float3 finalBoundsSize = targetLatticeDimensions * latticeResolution;
+        float3 finalBoundsSize = latticeDimensions * latticeResolution;
         float3 boundsDifference = finalBoundsSize - boundsSize;
         latticeNegativeCorner = (float3)visualMeshBounds.min
                                 - new float3(EPSILON, EPSILON, EPSILON)
@@ -568,6 +566,11 @@ public class LatticePreprocessor
     for (int i = 0; i < collisionWrapers.Count; i++)
     {
         CollisionWraper collisionWraper = collisionWrapers[i];
+        // for (int v = collisionWraper.colVertsRange.x; v < collisionWraper.colVertsRange.y; v++)
+        // {
+        //     int cornerParticleIdx = to1D_Particle(to3D(collisionWraper.cellIdx));
+        //     DebugVertex(cornerParticleIdx, collisionVertices[v]);
+        // }
         collisionWraper.cellIdx = latticeCells[collisionWrapers[i].cellIdx];
         collisionWrapers[i] = collisionWraper;
 
@@ -659,7 +662,7 @@ public class LatticePreprocessor
     private DynamicVertex GetCellDynamicVertex(int cellID, float3 vertexPos)
     {
         int3 baseCorner = to3D(cellID);
-        float3 cellOrigin = latticeNegativeCorner + (float3)baseCorner * latticeDimensions;
+        float3 cellOrigin = latticeNegativeCorner + baseCorner * latticeDimensions;
         // Normalize so the point is between 0 and 1 in all directions
         float3 p = (vertexPos - cellOrigin) / latticeDimensions;
 
@@ -705,7 +708,7 @@ public class LatticePreprocessor
             if (math.abs(det) < 1e-8f)
                 continue; // degenerate, skip
 
-            float3 lambda012 = math.mul(math.inverse(M), r); // fine for 5 tets per cell
+            float3 lambda012 = math.mul(math.inverse(M), r);
             float lambda3 = 1f - (lambda012.x + lambda012.y + lambda012.z);
             float4 bary = new float4(lambda012, lambda3);
 
@@ -715,6 +718,47 @@ public class LatticePreprocessor
 
         Debug.LogWarning($"GetCellDynamicVertex: no tetra found for cell {cellID}, pos {vertexPos}");
         return new DynamicVertex(new float4(1, 0, 0, 0), 0);
+    }
+
+    void DebugVertex(int cell, DynamicVertex vertex)
+    {
+        int4 tet = s_CellTets[vertex.tet];
+
+        int GetCellVertIndex(int localIndex)
+        {
+            int2 res = particleResolution.xy;
+
+            switch (localIndex)
+            {
+                case 0: return cell;
+                case 1: return cell + 1;
+                case 2: return cell + res.x;
+                case 3: return cell + res.x + 1;
+                case 4: return cell + res.x * res.y;
+                case 5: return cell + res.x * res.y + 1;
+                case 6: return cell + res.x * res.y + res.x;
+                case 7: return cell + res.x * res.y + res.x + 1;
+                default: return -1;
+            }
+        }
+
+        int vi0 = GetCellVertIndex(tet.x);
+        int vi1 = GetCellVertIndex(tet.y);
+        int vi2 = GetCellVertIndex(tet.z);
+        int vi3 = GetCellVertIndex(tet.w);
+
+        float3 p0 = latticeBody.transform.TransformPoint(latticeNegativeCorner + to3D_Particle(vi0) * latticeDimensions);
+        float3 p1 = latticeBody.transform.TransformPoint(latticeNegativeCorner + to3D_Particle(vi1) * latticeDimensions);
+        float3 p2 = latticeBody.transform.TransformPoint(latticeNegativeCorner + to3D_Particle(vi2) * latticeDimensions);
+        float3 p3 = latticeBody.transform.TransformPoint(latticeNegativeCorner + to3D_Particle(vi3) * latticeDimensions);
+
+        float4 w = vertex.bary;
+        float3 pos = p0 * w.x +
+                        p1 * w.y +
+                        p2 * w.z +
+                        p3 * w.w;
+
+        Debug.DrawLine(float3.zero, pos, Color.rebeccaPurple, 100f);
     }
 
 #endregion

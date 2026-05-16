@@ -170,7 +170,7 @@ public class PhysicsSolver : MonoBehaviour
         {
             // Calculate the particle position in the lattice
             int3 particleCoords = bodyData.to3D_Particle(bodyData.activeParticlesMask[i]);
-            float3 posInLattice = bodyData.latticeNegativeCorner + particleCoords * targetLatticeDimensions;
+            float3 posInLattice = bodyData.latticeNegativeCorner + particleCoords * bodyData.latticeDimensions;
             
             // Transform the position to world space
             float3 posInWorld = latticeBody.transform.TransformPoint(posInLattice);
@@ -289,6 +289,7 @@ public class PhysicsSolver : MonoBehaviour
         }
     }
 
+
     private void InitialiseSolver()
     {
         // Only initialise once
@@ -330,20 +331,21 @@ public class PhysicsSolver : MonoBehaviour
     private void DisposeLists()
     {
         // Dispose of all native lists
-        if (bodyParticleResolution.IsCreated) bodyParticleResolution.Dispose();
-        if (bodyDistConsCompliance.IsCreated) bodyDistConsCompliance.Dispose();
-        if (bodyVolConsCompliance.IsCreated) bodyVolConsCompliance.Dispose();
-        if (particles.IsCreated) particles.Dispose();
-        if (particleMask.IsCreated) particleMask.Dispose();
-        if (latticeCells.IsCreated) latticeCells.Dispose();
-        if (collisionVertices.IsCreated) collisionVertices.Dispose();
-        if (collisionTriangles.IsCreated) collisionTriangles.Dispose();
-        if (collisionEdges.IsCreated) collisionEdges.Dispose();
-        if (collisionWrapers.IsCreated) collisionWrapers.Dispose();
-        if (visualVerticesData.IsCreated) visualVerticesData.Dispose();
-        if (visualVerticesOffset.IsCreated) visualVerticesOffset.Dispose();
-        if (visualVertices.IsCreated) visualVertices.Dispose();
-        if (visualWrapers.IsCreated) visualWrapers.Dispose();
+        if (!initialised) return;
+        bodyParticleResolution.Dispose();
+        bodyDistConsCompliance.Dispose();
+        bodyVolConsCompliance.Dispose();
+        particles.Dispose();
+        particleMask.Dispose();
+        latticeCells.Dispose();
+        collisionVertices.Dispose();
+        collisionTriangles.Dispose();
+        collisionEdges.Dispose();
+        collisionWrapers.Dispose();
+        visualVerticesData.Dispose();
+        visualVerticesOffset.Dispose();
+        visualVertices.Dispose();
+        visualWrapers.Dispose();
     }
 
 
@@ -407,12 +409,12 @@ public class PhysicsSolver : MonoBehaviour
 
             // Get corner positions
             float3 p0 = particles[cell.y].currentPosition;
-            float3 p1 = particles[cell.y + res.x].currentPosition;
-            float3 p2 = particles[cell.y + res.x * res.y].currentPosition;
-            float3 p3 = particles[cell.y + res.x * res.y + res.x].currentPosition;
-            float3 p4 = particles[cell.y + 1].currentPosition;
-            float3 p5 = particles[cell.y + res.x + 1].currentPosition;
-            float3 p6 = particles[cell.y + res.x * res.y + 1].currentPosition;
+            float3 p1 = particles[cell.y + 1].currentPosition;
+            float3 p2 = particles[cell.y + res.x].currentPosition;
+            float3 p3 = particles[cell.y + res.x + 1].currentPosition;
+            float3 p4 = particles[cell.y + res.x * res.y].currentPosition;
+            float3 p5 = particles[cell.y + res.x * res.y + 1].currentPosition;
+            float3 p6 = particles[cell.y + res.x * res.y + res.x].currentPosition;
             float3 p7 = particles[cell.y + res.x * res.y + res.x + 1].currentPosition;
 
             // Draw cube edges (12 edges)
@@ -435,82 +437,87 @@ public class PhysicsSolver : MonoBehaviour
             Gizmos.DrawLine(p3, p7);
         }
 
-        // for (int i = 0; i < collisionWrapers.Length && debugColMesh; i++)
-        // {
-        //     LatticeCell cell = latticeCells[collisionWrapers[i].cellIdx];
-        //     int totalCount = 0;
-        //     int channel;
-        //     for (channel = 0; channel < 8; channel++) 
-        //     {
-        //         totalCount += globalChlCount[channel];
-        //         if (collisionWrapers[i].cellIdx < totalCount) break;
-        //     }
-        //     Gizmos.color = s_ChannelColors[channel];
+        for (int i = 0; i < collisionWrapers.Length && debugColMesh; i++)
+        {
+            int2 cell = latticeCells[collisionWrapers[i].cellIdx];
 
-        //     for (int v = collisionWrapers[i].colVertsRange.x; v < collisionWrapers[i].colVertsRange.y; v++)
-        //     {
-        //         Gizmos.DrawSphere(GetDynamicVertexPos(cell, collisionVertices[v]), 0.005f);
-        //     }
+            // Color assigment botch
+            int totalCount = 0;
+            int channel;
+            for (channel = 0; channel < 8; channel++) 
+            {
+                totalCount += globalChlCount[channel];
+                if (collisionWrapers[i].cellIdx < totalCount) break;
+            }
+            Gizmos.color = s_ChannelColors[channel];
 
-        //     for (int e = collisionWrapers[i].colEdgesRange.x; e < collisionWrapers[i].colEdgesRange.y; e++)
-        //     {
-        //         int2 edge = collisionEdges[e];
+            for (int v = collisionWrapers[i].colVertsRange.x; v < collisionWrapers[i].colVertsRange.y; v++)
+            {
+                Gizmos.DrawSphere(GetDynamicVertexPos(cell, collisionVertices[v]), 0.005f);
+            }
 
-        //         Gizmos.DrawLine(GetDynamicVertexPos(cell, collisionVertices[edge.x]), GetDynamicVertexPos(cell, collisionVertices[edge.y]));
-        //     }
-        // }
+            for (int e = collisionWrapers[i].colEdgesRange.x; e < collisionWrapers[i].colEdgesRange.y; e++)
+            {
+                int2 edge = collisionEdges[e];
 
-        // for (int i = 0; i < visualWrapers.Length && debugVisVerts; i++)
-        // {
-        //     LatticeCell cell = latticeCells[visualWrapers[i].x];
-        //     int totalCount = 0;
-        //     int channel;
-        //     for (channel = 0; channel < 8; channel++) 
-        //     {
-        //         totalCount += globalChlCount[channel];
-        //         if (visualWrapers[i].x < totalCount) break;
-        //     }
-        //     Gizmos.color = s_ChannelColors[channel];
+                Gizmos.DrawLine(GetDynamicVertexPos(cell, collisionVertices[edge.x]), GetDynamicVertexPos(cell, collisionVertices[edge.y]));
+            }
+        }
 
-        //     for (int v = visualWrapers[i].y; v < visualWrapers[i].z; v++)
-        //     {
-        //         Gizmos.DrawSphere(GetDynamicVertexPos(cell, visualVerticesData[v]), 0.005f);
-        //     }
-        // }
+        for (int i = 0; i < visualWrapers.Length && debugVisVerts; i++)
+        {
+            int2 cell = latticeCells[visualWrapers[i].x];
+
+            // Color assigment botch
+            int totalCount = 0;
+            int channel;
+            for (channel = 0; channel < 8; channel++) 
+            {
+                totalCount += globalChlCount[channel];
+                if (visualWrapers[i].x < totalCount) break;
+            }
+            Gizmos.color = s_ChannelColors[channel];
+
+            for (int v = visualWrapers[i].y; v < visualWrapers[i].z; v++)
+            {
+                Gizmos.DrawSphere(GetDynamicVertexPos(cell, visualVerticesData[v]), 0.005f);
+            }
+        }
     }
 
-    float3 GetDynamicVertexPos(LatticeCell cell, DynamicVertex vertex)
+    float3 GetDynamicVertexPos(int2 cell, DynamicVertex vertex)
     {
         int4 tet = s_CellTets[vertex.tet];
 
-        int GetCellVertIndex(LatticeCell c, int localIndex)
+        int GetCellVertIndex(int localIndex)
         {
+            int2 res = bodyParticleResolution[cell.x];
+
             switch (localIndex)
             {
-                case 0: return c.v0;
-                case 1: return c.v1;
-                case 2: return c.v2;
-                case 3: return c.v3;
-                case 4: return c.v4;
-                case 5: return c.v5;
-                case 6: return c.v6;
-                case 7: return c.v7;
+                case 0: return cell.y;
+                case 1: return cell.y + 1;
+                case 2: return cell.y + res.x;
+                case 3: return cell.y + res.x + 1;
+                case 4: return cell.y + res.x * res.y;
+                case 5: return cell.y + res.x * res.y + 1;
+                case 6: return cell.y + res.x * res.y + res.x;
+                case 7: return cell.y + res.x * res.y + res.x + 1;
                 default: return -1;
             }
         }
 
-        int vi0 = GetCellVertIndex(cell, tet.x);
-        int vi1 = GetCellVertIndex(cell, tet.y);
-        int vi2 = GetCellVertIndex(cell, tet.z);
-        int vi3 = GetCellVertIndex(cell, tet.w);
+        int vi0 = GetCellVertIndex(tet.x);
+        int vi1 = GetCellVertIndex(tet.y);
+        int vi2 = GetCellVertIndex(tet.z);
+        int vi3 = GetCellVertIndex(tet.w);
 
-        float3 p0 = particles[vi0].currentPosition; // or wherever you store positions
+        float3 p0 = particles[vi0].currentPosition;
         float3 p1 = particles[vi1].currentPosition;
         float3 p2 = particles[vi2].currentPosition;
         float3 p3 = particles[vi3].currentPosition;
 
-        float4 w = vertex.bary; // barycentric weights (w.x..w.w)
-
+        float4 w = vertex.bary;
         return  p0 * w.x +
                 p1 * w.y +
                 p2 * w.z +

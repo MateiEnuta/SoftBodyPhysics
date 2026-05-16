@@ -3036,18 +3036,18 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PhysicsSolver
   targetLatticeDimensions:
-    x: 0.25
-    y: 0.25
-    z: 0.25
+    x: 0.3
+    y: 0.3
+    z: 0.3
   substeps: 10
   gravity:
     x: 0
     y: -9.81
     z: 0
   damping: 0
-  debugLatticeCells: 1
+  debugLatticeCells: 0
   debugColMesh: 0
-  debugVisVerts: 0
+  debugVisVerts: 1
 --- !u!4 &1625525668
 Transform:
   m_ObjectHideFlags: 0
