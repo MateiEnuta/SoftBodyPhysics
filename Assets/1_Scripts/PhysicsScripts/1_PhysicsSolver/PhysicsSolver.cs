@@ -70,6 +70,11 @@ public class PhysicsSolver : MonoBehaviour
         float faceDiagLen = targetLatticeDimensions * 1.41421356f;
         float bodyDiagLen = targetLatticeDimensions * 1.7320508f;
 
+        // Volume constraint precomputed data
+        float cellVolume = math.pow(targetLatticeDimensions, 3);
+        float bigTetVol = cellVolume * (1f/3f);
+        float smallTetsVol = cellVolume * (1f/6f);
+
         int particleCount = particleMask.Length;
         int visualWraperCount = visualWrapers.Length;
         int collisionWraperCount = collisionWrapers.Length;
@@ -105,19 +110,23 @@ public class PhysicsSolver : MonoBehaviour
                 handle = distConsJob.Schedule(globalChlCount[chl], 1, handle);
             }
 
-            // int channelStart = 0;
-            // for (int chl = 0; chl < 8; chl++)
-            // {
-            //     VolConsJob volConsJob = new VolConsJob
-            //     {
-            //         dt = dt, damping = damping, channelStart = channelStart, latticeCells = latticeCells.AsArray(),
-            //         latticeCellBodyRef = latticeCellBodyRef.AsArray(), bodyLatticeDimensions = bodyLatticeDimensions.AsArray(),
-            //         bodyVolConsCompliance = bodyVolConsCompliance.AsArray(), particles = particles.AsArray()
-            //     };
-            //     handle = volConsJob.Schedule(globalChlCount[chl], 1, handle);
-
-            //     channelStart += globalChlCount[chl];
-            // }
+            for (int chl = 0; chl < 8; chl++)
+            {
+                VolConsJob volConsJob = new VolConsJob
+                {
+                    invDt = invDt,
+                    invDtSq = invDtSq,
+                    dtSq = dtSq,
+                    damping = damping,
+                    bigTetVol = bigTetVol,
+                    smallTetsVol = smallTetsVol,
+                    latticeCells = cellChannelSlices[chl],
+                    bodyParticleResolution = bodyParticleResolution.AsArray(),
+                    bodyVolConsCompliance = bodyVolConsCompliance.AsArray(),
+                    particles = particles.AsArray()
+                };
+                handle = volConsJob.Schedule(globalChlCount[chl], 1, handle);
+            }
 
             // BasicPlaneColJob basicPlaneColJob = new BasicPlaneColJob
             // {
@@ -126,7 +135,7 @@ public class PhysicsSolver : MonoBehaviour
             //     particles = particles.AsArray()
             // };
             // handle = basicPlaneColJob.Schedule(collisionWraperCount, 4, handle);
-            // handle.Complete();
+            handle.Complete();
         }
 
         // VisVertsUpdateJob visVertsUpdateJob = new VisVertsUpdateJob
@@ -136,7 +145,7 @@ public class PhysicsSolver : MonoBehaviour
         //     visualVertices = visualVertices.AsArray(), visualWrapers = visualWrapers.AsArray()
         // };
         // handle = visVertsUpdateJob.Schedule(visualWraperCount, 1, handle);
-        handle.Complete();
+        // handle.Complete();
 
         // Update visuals
         foreach (var body in bodyWrapers)

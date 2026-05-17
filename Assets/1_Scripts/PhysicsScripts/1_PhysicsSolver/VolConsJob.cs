@@ -7,43 +7,89 @@ using Unity.Mathematics;
 [BurstCompile]
 public struct VolConsJob : IJobParallelFor
 {
-    [ReadOnly] public float dt;
+    [ReadOnly] public float invDt, invDtSq, dtSq;
     [ReadOnly] public float damping;
-    [ReadOnly] public int channelStart;
-    [ReadOnly] public NativeArray<LatticeCell> latticeCells;
-    [ReadOnly] public NativeArray<int>         latticeCellBodyRef;
-    [ReadOnly] public NativeArray<float3>      bodyLatticeDimensions;
-    [ReadOnly] public NativeArray<float>       bodyVolConsCompliance;
-    [NativeDisableParallelForRestriction] public NativeArray<Particle> particles;
+    [ReadOnly] public float bigTetVol, smallTetsVol;
+    [ReadOnly] public NativeSlice<int2>   latticeCells;
+    [ReadOnly] public NativeArray<int2>   bodyParticleResolution;
+    [ReadOnly] public NativeArray<float>  bodyVolConsCompliance;
+    [NativeDisableParallelForRestriction]
+    public NativeArray<Particle> particles;
+
+
+    static readonly int4[] s_CellTets = new[]
+    {
+        new int4(0, 3, 6, 5),       // new int4(0, 1, 3, 7),
+        new int4(0, 5, 6, 4),       // new int4(0, 3, 2, 7),
+        new int4(0, 6, 3, 2),       // new int4(0, 2, 6, 7),
+        new int4(5, 3, 6, 7),       // new int4(0, 6, 4, 7),
+        new int4(0, 3, 5, 1)        // new int4(0, 4, 5, 7),
+                                    // new int4(0, 5, 1, 7)
+    };
+
 
     public void Execute(int index)
     {
-        // Add the current channel offset
-        index += channelStart;
-        float3 latticeCellDimensions = bodyLatticeDimensions[latticeCellBodyRef[index]];
-        float cellCompliance = bodyVolConsCompliance[latticeCellBodyRef[index]];
-        float cellVolume = latticeCellDimensions.x * latticeCellDimensions.y * latticeCellDimensions.z;
+        int2 cell = latticeCells[index];
+        int2 res = bodyParticleResolution[cell.x];
+        float cellCompliance = bodyVolConsCompliance[cell.x];
 
-        float bigTetVol = cellVolume * (1f/3f);
-        float smallTetsVol = cellVolume * (1f/6f);
+        int sx = res.x;
+        int sxy = res.x * res.y;
+
+        Particle p0 = particles[cell.y];
+        Particle p1 = particles[cell.y + 1];
+        Particle p2 = particles[cell.y + sx];
+        Particle p3 = particles[cell.y + sx + 1];
+        Particle p4 = particles[cell.y + sxy];
+        Particle p5 = particles[cell.y + sxy + 1];
+        Particle p6 = particles[cell.y + sxy + sx];
+        Particle p7 = particles[cell.y + sxy + sx + 1];
 
         for (int i = 0; i < 5; i++)
         {
-            int4 currentTet = GetCellTet(latticeCells[index], i);
+            int4 currentTet = s_CellTets[i];
             float initialTetVolume = i == 0 ? bigTetVol : smallTetsVol;
 
-            SolveVolumeConstraint(currentTet, initialTetVolume, cellCompliance);
+            SolveVolumeConstraint(
+                ref GetCellVertIndex(currentTet.x, ref p0, ref p1, ref p2, ref p3, ref p4, ref p5, ref p6, ref p7),
+                ref GetCellVertIndex(currentTet.y, ref p0, ref p1, ref p2, ref p3, ref p4, ref p5, ref p6, ref p7),
+                ref GetCellVertIndex(currentTet.z, ref p0, ref p1, ref p2, ref p3, ref p4, ref p5, ref p6, ref p7),
+                ref GetCellVertIndex(currentTet.w, ref p0, ref p1, ref p2, ref p3, ref p4, ref p5, ref p6, ref p7), 
+                initialTetVolume, cellCompliance
+            );
+        }
+
+        particles[cell.y] = p0;
+        particles[cell.y + 1] = p1;
+        particles[cell.y + sx] = p2;
+        particles[cell.y + sx + 1] = p3;
+        particles[cell.y + sxy] = p4;
+        particles[cell.y + sxy + 1] = p5;
+        particles[cell.y + sxy + sx] = p6;
+        particles[cell.y + sxy + sx + 1] = p7;
+    }
+
+    private ref Particle GetCellVertIndex(int localIndex, ref Particle p1, ref Particle p2, ref Particle p3, 
+        ref Particle p4, ref Particle p5, ref Particle p6, ref Particle p7, ref Particle p8)
+    {
+        switch (localIndex)
+        {
+            case 0: return ref p1;
+            case 1: return ref p2;
+            case 2: return ref p3;
+            case 3: return ref p4;
+            case 4: return ref p5;
+            case 5: return ref p6;
+            case 6: return ref p7;
+            case 7: return ref p8;
+            default: return ref p1;
         }
     }
 
-    private void SolveVolumeConstraint(int4 tet, float initialVolume, float compliance)
+    private void SolveVolumeConstraint(ref Particle p1, ref Particle p2, ref Particle p3, ref Particle p4, 
+        float initialVolume, float compliance)
     {
-        // Load tetra particles
-        Particle p1 = particles[tet.x];
-        Particle p2 = particles[tet.y];
-        Particle p3 = particles[tet.z];
-        Particle p4 = particles[tet.w];
-
         // Compute signed volume
         float3 v1 = p2.currentPosition - p1.currentPosition;
         float3 v2 = p3.currentPosition - p1.currentPosition;
@@ -69,7 +115,7 @@ public struct VolConsJob : IJobParallelFor
         sumWeightedGradients += p3.invMass * math.lengthsq(grad3);
         sumWeightedGradients += p4.invMass * math.lengthsq(grad4);
 
-        float alphaTilde = compliance / (dt * dt);
+        float alphaTilde = compliance * invDtSq;
         sumWeightedGradients += alphaTilde;
 
         if (math.abs(sumWeightedGradients) < 1e-10f) return;
@@ -80,8 +126,8 @@ public struct VolConsJob : IJobParallelFor
         float dampingTerm = 0f;
         if (damping > 0f)
         {
-            float betaTilde = damping * dt * dt;
-            float gamma = alphaTilde * betaTilde / dt;
+            float betaTilde = damping * dtSq;
+            float gamma = alphaTilde * betaTilde * invDt;
 
             float3 vel1 = p1.currentPosition - p1.previousPosition;
             float3 vel2 = p2.currentPosition - p2.previousPosition;
@@ -106,23 +152,5 @@ public struct VolConsJob : IJobParallelFor
         p2.currentPosition += p2.invMass * deltaLambda * grad2;
         p3.currentPosition += p3.invMass * deltaLambda * grad3;
         p4.currentPosition += p4.invMass * deltaLambda * grad4;
-
-        // Write back
-        particles[tet.x] = p1;
-        particles[tet.y] = p2;
-        particles[tet.z] = p3;
-        particles[tet.w] = p4;
-    }
-
-    static int4 GetCellTet(LatticeCell c, int tetIndex)
-    {
-        switch (tetIndex)
-        {
-            case 0: return new int4(c.v0, c.v3, c.v6, c.v5);
-            case 1: return new int4(c.v0, c.v5, c.v6, c.v4);
-            case 2: return new int4(c.v0, c.v6, c.v3, c.v2);
-            case 3: return new int4(c.v5, c.v3, c.v6, c.v7);
-            default:return new int4(c.v0, c.v3, c.v5, c.v1);
-        }
     }
 }
