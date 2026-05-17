@@ -7,21 +7,22 @@ using Unity.Mathematics;
 [BurstCompile]
 public struct ParticleUpdateJob : IJobParallelFor
 {
-    [ReadOnly] public float3 gravity;
-    [ReadOnly] public float dt;
+    [ReadOnly] public float3 gravityDt;
+    [ReadOnly] public float dt, invDt;
+    [ReadOnly] public NativeArray<int> particleMask;
+    [NativeDisableParallelForRestriction]
     public NativeArray<Particle> particles;
 
     public void Execute(int index)
     {
-        Particle p = particles[index];
+        Particle p = particles[particleMask[index]];
 
         // Semi-implicit Euler: update velocity first
-        float3 vel = (p.currentPosition - p.previousPosition) / dt;
-        vel += gravity * dt;
+        float3 vel = (p.currentPosition - p.previousPosition) * invDt + gravityDt;
 
         p.previousPosition = p.currentPosition;
         p.currentPosition += vel * dt;
 
-        particles[index] = p;
+        particles[particleMask[index]] = p;
     }
 }

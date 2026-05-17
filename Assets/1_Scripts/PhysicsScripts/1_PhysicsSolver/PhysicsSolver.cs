@@ -9,7 +9,7 @@ using Unity.Jobs;
 public class PhysicsSolver : MonoBehaviour
 {
     // --------------Public data--------------
-    public float3 targetLatticeDimensions = new float3(1,1,1);
+    public float targetLatticeDimensions = 1;
     public float substeps = 10;
     public float3 gravity = Physics.gravity;
     public float damping = 0;
@@ -31,11 +31,12 @@ public class PhysicsSolver : MonoBehaviour
     private NativeList<int>         particleMask;
 
     // --------------Cell data--------------
-    private NativeList<int2> latticeCells;
+    private NativeList<int2>    latticeCells;
+    private NativeSlice<int2>[] cellChannelSlices;
     // Main thread
-    private List<int>        latticeColReferences;
-    private List<int>        latticeVisReferences;
-    private int[]            globalChlCount;
+    private List<int>           latticeColReferences;
+    private List<int>           latticeVisReferences;
+    private int[]               globalChlCount;
 
     // --------------Collision data--------------
     private NativeList<DynamicVertex>   collisionVertices;
@@ -52,89 +53,108 @@ public class PhysicsSolver : MonoBehaviour
 
 #region Simulation
 
-    // private void FixedUpdate()
-    // {
-    //     if (!initialised) return;
-    //     JobHandle handle = default;
-    //     float dt = Time.fixedDeltaTime / substeps;
+    private void FixedUpdate()
+    {
+        if (!initialised) return;
+        JobHandle handle = default;
+        float dt = Time.fixedDeltaTime / substeps;
+        float dtSq = dt * dt;
+        float invDt = 1f / dt;
+        float invDtSq = invDt * invDt;
 
-    //     int particleCount = particles.Length;
-    //     int visualWraperCount = visualWrapers.Length;
-    //     int collisionWraperCount = collisionWrapers.Length;
+        // Particle precomputed data
+        float3 gravityDt = gravity * dt;
 
-    //     for (int i = 0; i < substeps; i++)
-    //     {
-    //         ParticleUpdateJob particleUpdateJob = new ParticleUpdateJob
-    //         {
-    //             gravity = gravity,
-    //             dt = dt, particles = particles.AsArray()  
-    //         };
-    //         handle = particleUpdateJob.Schedule(particleCount, 32, handle);
+        // Distance constraint precomputed data
+        float edgeLen     = targetLatticeDimensions;
+        float faceDiagLen = targetLatticeDimensions * 1.41421356f;
+        float bodyDiagLen = targetLatticeDimensions * 1.7320508f;
 
-    //         int channelStart = 0;
-    //         for (int chl = 0; chl < 8; chl++)
-    //         {
-    //             DistConsJob distConsJob = new DistConsJob
-    //             {
-    //                 dt = dt, damping = damping, channelStart = channelStart, latticeCells = latticeCells.AsArray(),
-    //                 latticeCellBodyRef = latticeCellBodyRef.AsArray(), bodyLatticeDimensions = bodyLatticeDimensions.AsArray(),
-    //                 bodyDistConsCompliance = bodyDistConsCompliance.AsArray(), particles = particles.AsArray()
-    //             };
-    //             handle = distConsJob.Schedule(globalChlCount[chl], 1, handle);
+        int particleCount = particleMask.Length;
+        int visualWraperCount = visualWrapers.Length;
+        int collisionWraperCount = collisionWrapers.Length;
 
-    //             channelStart += globalChlCount[chl];
-    //         }
+        for (int i = 0; i < substeps; i++)
+        {
+            ParticleUpdateJob particleUpdateJob = new ParticleUpdateJob
+            {
+                gravityDt = gravityDt,
+                dt = dt,
+                invDt = invDt,
+                particles = particles.AsArray(),
+                particleMask = particleMask.AsArray()
+            };
+            handle = particleUpdateJob.Schedule(particleCount, 32, handle);
 
-    //         channelStart = 0;
-    //         for (int chl = 0; chl < 8; chl++)
-    //         {
-    //             VolConsJob volConsJob = new VolConsJob
-    //             {
-    //                 dt = dt, damping = damping, channelStart = channelStart, latticeCells = latticeCells.AsArray(),
-    //                 latticeCellBodyRef = latticeCellBodyRef.AsArray(), bodyLatticeDimensions = bodyLatticeDimensions.AsArray(),
-    //                 bodyVolConsCompliance = bodyVolConsCompliance.AsArray(), particles = particles.AsArray()
-    //             };
-    //             handle = volConsJob.Schedule(globalChlCount[chl], 1, handle);
+            for (int chl = 0; chl < 8; chl++)
+            {
+                DistConsJob distConsJob = new DistConsJob
+                {
+                    invDt = invDt,
+                    invDtSq = invDtSq,
+                    dtSq = dtSq,
+                    damping = damping,
+                    edgeLen = edgeLen,
+                    faceDiagLen = faceDiagLen,
+                    bodyDiagLen = bodyDiagLen,
+                    latticeCells = cellChannelSlices[chl],
+                    bodyParticleResolution = bodyParticleResolution.AsArray(),
+                    bodyDistConsCompliance = bodyDistConsCompliance.AsArray(),
+                    particles = particles.AsArray()
+                };
+                handle = distConsJob.Schedule(globalChlCount[chl], 1, handle);
+            }
 
-    //             channelStart += globalChlCount[chl];
-    //         }
+            // int channelStart = 0;
+            // for (int chl = 0; chl < 8; chl++)
+            // {
+            //     VolConsJob volConsJob = new VolConsJob
+            //     {
+            //         dt = dt, damping = damping, channelStart = channelStart, latticeCells = latticeCells.AsArray(),
+            //         latticeCellBodyRef = latticeCellBodyRef.AsArray(), bodyLatticeDimensions = bodyLatticeDimensions.AsArray(),
+            //         bodyVolConsCompliance = bodyVolConsCompliance.AsArray(), particles = particles.AsArray()
+            //     };
+            //     handle = volConsJob.Schedule(globalChlCount[chl], 1, handle);
 
-    //         BasicPlaneColJob basicPlaneColJob = new BasicPlaneColJob
-    //         {
-    //             yPlanePos = 0f, latticeCells = latticeCells.AsArray(),
-    //             collisionVertices = collisionVertices.AsArray(), collisionWrapers = collisionWrapers.AsArray(),
-    //             particles = particles.AsArray()
-    //         };
-    //         handle = basicPlaneColJob.Schedule(collisionWraperCount, 4, handle);
-    //         handle.Complete();
-    //     }
+            //     channelStart += globalChlCount[chl];
+            // }
 
-    //     VisVertsUpdateJob visVertsUpdateJob = new VisVertsUpdateJob
-    //     {
-    //         particles = particles.AsArray(), latticeCells = latticeCells.AsArray(),
-    //         visualVerticesData = visualVerticesData.AsArray(), visualVerticesOffset = visualVerticesOffset.AsArray(),
-    //         visualVertices = visualVertices.AsArray(), visualWrapers = visualWrapers.AsArray()
-    //     };
-    //     handle = visVertsUpdateJob.Schedule(visualWraperCount, 1, handle);
-    //     handle.Complete();
+            // BasicPlaneColJob basicPlaneColJob = new BasicPlaneColJob
+            // {
+            //     yPlanePos = 0f, latticeCells = latticeCells.AsArray(),
+            //     collisionVertices = collisionVertices.AsArray(), collisionWrapers = collisionWrapers.AsArray(),
+            //     particles = particles.AsArray()
+            // };
+            // handle = basicPlaneColJob.Schedule(collisionWraperCount, 4, handle);
+            // handle.Complete();
+        }
 
-    //     // Update visuals
-    //     foreach (var body in bodyWrapers)
-    //     {
-    //         // Calculate the average position
-    //         float3 averagePos = Vector3.zero;
-    //         for (int i = body.particlesRange.x; i < body.particlesRange.y; i++) averagePos += particles[i].currentPosition;
-    //         averagePos /= body.particlesRange.y - body.particlesRange.x;
-    //         body.transform.position = averagePos;
-    //         body.transform.rotation = quaternion.identity;
+        // VisVertsUpdateJob visVertsUpdateJob = new VisVertsUpdateJob
+        // {
+        //     particles = particles.AsArray(), latticeCells = latticeCells.AsArray(),
+        //     visualVerticesData = visualVerticesData.AsArray(), visualVerticesOffset = visualVerticesOffset.AsArray(),
+        //     visualVertices = visualVertices.AsArray(), visualWrapers = visualWrapers.AsArray()
+        // };
+        // handle = visVertsUpdateJob.Schedule(visualWraperCount, 1, handle);
+        handle.Complete();
 
-    //         for (int i = body.visVerticesRange.x; i < body.visVerticesRange.y; i++) visualVertices[i] -= averagePos;
+        // Update visuals
+        foreach (var body in bodyWrapers)
+        {
+            // Calculate the average position
+            float3 averagePos = Vector3.zero;
+            for (int i = body.particlesRange.x; i < body.particlesRange.y; i++) averagePos += particles[i].currentPosition;
+            averagePos /= body.particlesRange.y - body.particlesRange.x;
+            body.transform.position = averagePos;
+            body.transform.rotation = quaternion.identity;
 
-    //         body.visualMesh.SetVertices(visualVertices.AsArray(), body.visVerticesRange.x, body.visVerticesRange.y - body.visVerticesRange.x);
-    //         body.visualMesh.RecalculateBounds();
-    //         body.visualMesh.RecalculateNormals();
-    //     }
-    // }
+            for (int i = body.visVerticesRange.x; i < body.visVerticesRange.y; i++) visualVertices[i] -= averagePos;
+
+            body.visualMesh.SetVertices(visualVertices.AsArray(), body.visVerticesRange.x, body.visVerticesRange.y - body.visVerticesRange.x);
+            body.visualMesh.RecalculateBounds();
+            body.visualMesh.RecalculateNormals();
+        }
+    }
 
 #endregion
 
@@ -260,6 +280,13 @@ public class PhysicsSolver : MonoBehaviour
         bodyDistConsCompliance.Add(latticeBody.distanceCompliance);
         bodyVolConsCompliance.Add(latticeBody.volumeCompliance);
 
+        int channelStart = 0;
+        for (int chl = 0; chl < 8; chl++)
+        {
+            cellChannelSlices[chl] = new NativeSlice<int2>(latticeCells.AsArray(), channelStart, globalChlCount[chl]);
+            channelStart += globalChlCount[chl];
+        }
+
         // Update the cell references
         UpdateCellReferences();
         // Testing and finally finding that bug [05.03.2026]
@@ -310,8 +337,8 @@ public class PhysicsSolver : MonoBehaviour
 
         // Cell data allocation
         latticeCells = new NativeList<int2>(Allocator.Persistent);
+        cellChannelSlices = new NativeSlice<int2>[8];
         globalChlCount = new int[8];
-        for (int i = 0; i < 8; i++) globalChlCount[i] = 0;
         latticeColReferences = new List<int>();
         latticeVisReferences = new List<int>();
 
@@ -338,6 +365,7 @@ public class PhysicsSolver : MonoBehaviour
         particles.Dispose();
         particleMask.Dispose();
         latticeCells.Dispose();
+        cellChannelSlices = null;
         collisionVertices.Dispose();
         collisionTriangles.Dispose();
         collisionEdges.Dispose();
