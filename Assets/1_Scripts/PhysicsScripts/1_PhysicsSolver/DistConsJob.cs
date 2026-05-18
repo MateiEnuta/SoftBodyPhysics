@@ -19,30 +19,53 @@ public struct DistConsJob : IJobParallelFor
 
     public void Execute(int index)
     {
+        LatticeCell cell = latticeCells[index];
         float cellCompliance = bodyDistConsCompliance[latticeCellBodyRef[index]];
 
-        for (int i = 0; i < 7; i++)
-        for (int j = i+1; j < 8; j++)
-        {
-            int e1 = GetCellVertex(latticeCells[index], i);
-            int e2 = GetCellVertex(latticeCells[index], j);
+        Particle p0 = particles[cell.v0];
+        Particle p1 = particles[cell.v1];
+        Particle p2 = particles[cell.v2];
+        Particle p3 = particles[cell.v3];
+        Particle p4 = particles[cell.v4];
+        Particle p5 = particles[cell.v5];
+        Particle p6 = particles[cell.v6];
+        Particle p7 = particles[cell.v7];
 
-            SolveDistanceConstraint(e1, e2, GetRestLength(i, j), cellCompliance);
+        for (int a = 0; a < 7; a++)
+        for (int b = a + 1; b < 8; b++)
+        {
+            SolveDistanceConstraint(
+                ref GetCellVertIndex(a, ref p0, ref p1, ref p2, ref p3, ref p4, ref p5, ref p6, ref p7), 
+                ref GetCellVertIndex(b, ref p0, ref p1, ref p2, ref p3, ref p4, ref p5, ref p6, ref p7), 
+                GetRestLength(a, b), 
+                cellCompliance
+            );
         }
+
+        particles[cell.v0] = p0;
+        particles[cell.v1] = p1;
+        particles[cell.v2] = p2;
+        particles[cell.v3] = p3;
+        particles[cell.v4] = p4;
+        particles[cell.v5] = p5;
+        particles[cell.v6] = p6;
+        particles[cell.v7] = p7;
     }
 
-    static int GetCellVertex(LatticeCell c, int i)
+    private ref Particle GetCellVertIndex(int localIndex, ref Particle p1, ref Particle p2, ref Particle p3, 
+        ref Particle p4, ref Particle p5, ref Particle p6, ref Particle p7, ref Particle p8)
     {
-        switch (i)
+        switch (localIndex)
         {
-            case 0: return c.v0;
-            case 1: return c.v1;
-            case 2: return c.v2;
-            case 3: return c.v3;
-            case 4: return c.v4;
-            case 5: return c.v5;
-            case 6: return c.v6;
-            default:return c.v7;
+            case 0: return ref p1;
+            case 1: return ref p2;
+            case 2: return ref p3;
+            case 3: return ref p4;
+            case 4: return ref p5;
+            case 5: return ref p6;
+            case 6: return ref p7;
+            case 7: return ref p8;
+            default: return ref p1;
         }
     }
 
@@ -56,27 +79,21 @@ public struct DistConsJob : IJobParallelFor
                                 bodyDiagLen;
     }
 
-    private void SolveDistanceConstraint(int e1Idx, int e2Idx, float initialLength, float compliance)
+    private void SolveDistanceConstraint(ref Particle e1, ref Particle e2, float initialLength, float compliance)
     {
-        Particle e1 = particles[e1Idx];
-        Particle e2 = particles[e2Idx];
-
         // Calculate current length
         float3 dir = e2.currentPosition - e1.currentPosition;
         float currentLength = math.length(dir);
         if (currentLength < 1e-11) return;
-
-        float C = currentLength - initialLength;
-
-        float3 n = dir / currentLength;
-        float3 grad1 = -n;
-        float3 grad2 = n;
 
         // Sum is just the inv masses and the compliance term
         float sumWeightedGradients = e1.invMass + e2.invMass;
         float alphaTilde = compliance * invDtSq;
         sumWeightedGradients += alphaTilde;
         if (math.abs(sumWeightedGradients) < 1e-10f) return;
+
+        float C = currentLength - initialLength;
+        float3 n = dir / currentLength;
 
         float dampingTerm = 0f;
         if (damping > 0f)
@@ -87,7 +104,7 @@ public struct DistConsJob : IJobParallelFor
             // Constraint-space velocity
             float3 v1 = e1.currentPosition - e1.previousPosition;
             float3 v2 = e2.currentPosition - e2.previousPosition;
-            float relativeVelocity = math.dot(v2 - v1, grad2);
+            float relativeVelocity = math.dot(v2 - v1, n);
 
             dampingTerm = gamma * relativeVelocity;
 
@@ -99,11 +116,7 @@ public struct DistConsJob : IJobParallelFor
         float deltaLambda = -(C + dampingTerm) / sumWeightedGradients;
 
         // Apply positional correction
-        e1.currentPosition += e1.invMass * deltaLambda * grad1;
-        e2.currentPosition += e2.invMass * deltaLambda * grad2;
-
-        // Write back
-        particles[e1Idx] = e1;
-        particles[e2Idx] = e2;
+        e1.currentPosition += e1.invMass * deltaLambda * -n;
+        e2.currentPosition += e2.invMass * deltaLambda * n;
     }
 }

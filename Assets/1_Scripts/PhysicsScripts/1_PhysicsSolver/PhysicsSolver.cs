@@ -86,7 +86,6 @@ public class PhysicsSolver : MonoBehaviour
             };
             handle = particleUpdateJob.Schedule(particleCount, 32, handle);
 
-            int channelStart = 0;
             for (int chl = 0; chl < 8; chl++)
             {
                 DistConsJob distConsJob = new DistConsJob
@@ -104,11 +103,8 @@ public class PhysicsSolver : MonoBehaviour
                     particles = particles.AsArray()
                 };
                 handle = distConsJob.Schedule(globalChlCount[chl], 1, handle);
-
-                channelStart += globalChlCount[chl];
             }
 
-            channelStart = 0;
             for (int chl = 0; chl < 8; chl++)
             {
                 VolConsJob volConsJob = new VolConsJob
@@ -125,8 +121,6 @@ public class PhysicsSolver : MonoBehaviour
                     particles = particles.AsArray()
                 };
                 handle = volConsJob.Schedule(globalChlCount[chl], 1, handle);
-
-                channelStart += globalChlCount[chl];
             }
 
             BasicPlaneColJob basicPlaneColJob = new BasicPlaneColJob
@@ -138,6 +132,7 @@ public class PhysicsSolver : MonoBehaviour
                 particles = particles.AsArray()
             };
             handle = basicPlaneColJob.Schedule(collisionWraperCount, 1, handle);
+            handle.Complete();
         }
 
         VisVertsUpdateJob visVertsUpdateJob = new VisVertsUpdateJob
