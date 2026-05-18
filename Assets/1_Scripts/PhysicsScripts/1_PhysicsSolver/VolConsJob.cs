@@ -7,25 +7,18 @@ using Unity.Mathematics;
 [BurstCompile]
 public struct VolConsJob : IJobParallelFor
 {
-    [ReadOnly] public float dt;
+    [ReadOnly] public float dtSq, invDt, invDtSq;
     [ReadOnly] public float damping;
-    [ReadOnly] public int channelStart;
-    [ReadOnly] public NativeArray<LatticeCell> latticeCells;
+    [ReadOnly] public float bigTetVol, smallTetsVol;
+    [ReadOnly] public NativeSlice<LatticeCell> latticeCells;
     [ReadOnly] public NativeArray<int>         latticeCellBodyRef;
-    [ReadOnly] public NativeArray<float3>      bodyLatticeDimensions;
     [ReadOnly] public NativeArray<float>       bodyVolConsCompliance;
-    [NativeDisableParallelForRestriction] public NativeArray<Particle> particles;
+    [NativeDisableParallelForRestriction]
+    public NativeArray<Particle> particles;
 
     public void Execute(int index)
     {
-        // Add the current channel offset
-        index += channelStart;
-        float3 latticeCellDimensions = bodyLatticeDimensions[latticeCellBodyRef[index]];
         float cellCompliance = bodyVolConsCompliance[latticeCellBodyRef[index]];
-        float cellVolume = latticeCellDimensions.x * latticeCellDimensions.y * latticeCellDimensions.z;
-
-        float bigTetVol = cellVolume * (1f/3f);
-        float smallTetsVol = cellVolume * (1f/6f);
 
         for (int i = 0; i < 5; i++)
         {
@@ -33,6 +26,18 @@ public struct VolConsJob : IJobParallelFor
             float initialTetVolume = i == 0 ? bigTetVol : smallTetsVol;
 
             SolveVolumeConstraint(currentTet, initialTetVolume, cellCompliance);
+        }
+    }
+
+    static int4 GetCellTet(LatticeCell c, int tetIndex)
+    {
+        switch (tetIndex)
+        {
+            case 0: return new int4(c.v0, c.v3, c.v6, c.v5);
+            case 1: return new int4(c.v0, c.v5, c.v6, c.v4);
+            case 2: return new int4(c.v0, c.v6, c.v3, c.v2);
+            case 3: return new int4(c.v5, c.v3, c.v6, c.v7);
+            default:return new int4(c.v0, c.v3, c.v5, c.v1);
         }
     }
 
@@ -69,7 +74,7 @@ public struct VolConsJob : IJobParallelFor
         sumWeightedGradients += p3.invMass * math.lengthsq(grad3);
         sumWeightedGradients += p4.invMass * math.lengthsq(grad4);
 
-        float alphaTilde = compliance / (dt * dt);
+        float alphaTilde = compliance * invDtSq;
         sumWeightedGradients += alphaTilde;
 
         if (math.abs(sumWeightedGradients) < 1e-10f) return;
@@ -80,8 +85,8 @@ public struct VolConsJob : IJobParallelFor
         float dampingTerm = 0f;
         if (damping > 0f)
         {
-            float betaTilde = damping * dt * dt;
-            float gamma = alphaTilde * betaTilde / dt;
+            float betaTilde = damping * dtSq;
+            float gamma = alphaTilde * betaTilde * invDt;
 
             float3 vel1 = p1.currentPosition - p1.previousPosition;
             float3 vel2 = p2.currentPosition - p2.previousPosition;
@@ -112,17 +117,5 @@ public struct VolConsJob : IJobParallelFor
         particles[tet.y] = p2;
         particles[tet.z] = p3;
         particles[tet.w] = p4;
-    }
-
-    static int4 GetCellTet(LatticeCell c, int tetIndex)
-    {
-        switch (tetIndex)
-        {
-            case 0: return new int4(c.v0, c.v3, c.v6, c.v5);
-            case 1: return new int4(c.v0, c.v5, c.v6, c.v4);
-            case 2: return new int4(c.v0, c.v6, c.v3, c.v2);
-            case 3: return new int4(c.v5, c.v3, c.v6, c.v7);
-            default:return new int4(c.v0, c.v3, c.v5, c.v1);
-        }
     }
 }

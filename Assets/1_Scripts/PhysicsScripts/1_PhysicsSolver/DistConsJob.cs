@@ -7,37 +7,53 @@ using Unity.Mathematics;
 [BurstCompile]
 public struct DistConsJob : IJobParallelFor
 {
-    [ReadOnly] public float dt;
+    [ReadOnly] public float dtSq, invDt, invDtSq;
     [ReadOnly] public float damping;
-    [ReadOnly] public int channelStart;
-    [ReadOnly] public NativeArray<LatticeCell> latticeCells;
+    [ReadOnly] public float edgeLen, faceDiagLen, bodyDiagLen;
+    [ReadOnly] public NativeSlice<LatticeCell> latticeCells;
     [ReadOnly] public NativeArray<int>         latticeCellBodyRef;
-    [ReadOnly] public NativeArray<float3>      bodyLatticeDimensions;
     [ReadOnly] public NativeArray<float>       bodyDistConsCompliance;
-    [NativeDisableParallelForRestriction] public NativeArray<Particle> particles;
+    [NativeDisableParallelForRestriction]
+    public NativeArray<Particle> particles;
 
 
     public void Execute(int index)
     {
-        // Add the current channel offset
-        index += channelStart;
-        float3 latticeCellDimensions = bodyLatticeDimensions[latticeCellBodyRef[index]];
         float cellCompliance = bodyDistConsCompliance[latticeCellBodyRef[index]];
 
         for (int i = 0; i < 7; i++)
+        for (int j = i+1; j < 8; j++)
         {
-            for (int j = i+1; j < 8; j++)
-            {
-                int e1 = GetCellVertex(latticeCells[index], i);
-                int e2 = GetCellVertex(latticeCells[index], j);
+            int e1 = GetCellVertex(latticeCells[index], i);
+            int e2 = GetCellVertex(latticeCells[index], j);
 
-                float3 e1Pos = CornerLocalPos(i, latticeCellDimensions);
-                float3 e2Pos = CornerLocalPos(j, latticeCellDimensions);
-                float initialLength = math.length(e2Pos - e1Pos);
-
-                SolveDistanceConstraint(e1, e2, initialLength, cellCompliance);
-            }
+            SolveDistanceConstraint(e1, e2, GetRestLength(i, j), cellCompliance);
         }
+    }
+
+    static int GetCellVertex(LatticeCell c, int i)
+    {
+        switch (i)
+        {
+            case 0: return c.v0;
+            case 1: return c.v1;
+            case 2: return c.v2;
+            case 3: return c.v3;
+            case 4: return c.v4;
+            case 5: return c.v5;
+            case 6: return c.v6;
+            default:return c.v7;
+        }
+    }
+
+    private float GetRestLength(int a, int b)
+    {
+        int diff = a ^ b;
+        int axisCount = (diff & 1) + ((diff >> 1) & 1) + ((diff >> 2) & 1);
+
+        return axisCount == 1 ? edgeLen :
+            axisCount == 2 ? faceDiagLen :
+                                bodyDiagLen;
     }
 
     private void SolveDistanceConstraint(int e1Idx, int e2Idx, float initialLength, float compliance)
@@ -58,15 +74,15 @@ public struct DistConsJob : IJobParallelFor
 
         // Sum is just the inv masses and the compliance term
         float sumWeightedGradients = e1.invMass + e2.invMass;
-        float alphaTilde = compliance / (dt * dt);
+        float alphaTilde = compliance * invDtSq;
         sumWeightedGradients += alphaTilde;
         if (math.abs(sumWeightedGradients) < 1e-10f) return;
 
         float dampingTerm = 0f;
         if (damping > 0f)
         {
-            float betaTilde = damping * dt * dt;
-            float gamma = alphaTilde * betaTilde / dt;
+            float betaTilde = damping * dtSq;
+            float gamma = alphaTilde * betaTilde * invDt;
 
             // Constraint-space velocity
             float3 v1 = e1.currentPosition - e1.previousPosition;
@@ -89,35 +105,5 @@ public struct DistConsJob : IJobParallelFor
         // Write back
         particles[e1Idx] = e1;
         particles[e2Idx] = e2;
-    }
-
-    static float3 CornerLocalPos(int i, float3 d)
-    {
-        switch (i)
-        {
-            case 0: return new float3(0,   0,   0);
-            case 1: return new float3(d.x, 0,   0);
-            case 2: return new float3(0,   d.y, 0);
-            case 3: return new float3(d.x, d.y, 0);
-            case 4: return new float3(0,   0,   d.z);
-            case 5: return new float3(d.x, 0,   d.z);
-            case 6: return new float3(0,   d.y, d.z);
-            default:return new float3(d.x, d.y, d.z);
-        }
-    }
-
-    static int GetCellVertex(LatticeCell c, int i)
-    {
-        switch (i)
-        {
-            case 0: return c.v0;
-            case 1: return c.v1;
-            case 2: return c.v2;
-            case 3: return c.v3;
-            case 4: return c.v4;
-            case 5: return c.v5;
-            case 6: return c.v6;
-            default:return c.v7;
-        }
     }
 }

@@ -80,36 +80,27 @@ public class LatticePreprocessor
         if (latticeBody.visualMesh == null) return;
         this.latticeBody = latticeBody;
 
-        // 1) World-space bounds
+        // Calculate bounds
         Bounds visualMeshBounds = latticeBody.visualMesh.bounds;
         latticeBody.visualMesh.MarkDynamic();
         latticeBody.visualMesh.RecalculateBounds();
         latticeBody.visualMesh.RecalculateNormals();
-        float EPSILON = 1e-4f;
+        const float EPSILON = 1e-4f;
 
         float3 boundsSize = (float3)visualMeshBounds.size
                             + new float3(2 * EPSILON, 2 * EPSILON, 2 * EPSILON);
-        latticeNegativeCorner = (float3)visualMeshBounds.min
-                                - new float3(EPSILON, EPSILON, EPSILON);
+        latticeDimensions = targetLatticeDimensions / latticeBody.transform.lossyScale;
 
-        float3 localTargetDimensions = targetLatticeDimensions / latticeBody.transform.lossyScale;
-        float3 safeTarget = new float3(
-            math.max(localTargetDimensions.x, 0.001f),
-            math.max(localTargetDimensions.y, 0.001f),
-            math.max(localTargetDimensions.z, 0.001f));
-
-        // 2) Compute integer cell counts in world space
-        int nx = math.clamp((int)math.round(boundsSize.x / safeTarget.x), 1, 40);
-        int ny = math.clamp((int)math.round(boundsSize.y / safeTarget.y), 1, 40);
-        int nz = math.clamp((int)math.round(boundsSize.z / safeTarget.z), 1, 40);
-
-        // 3) Final lattice data (world-space cell size)
+        int nx =(int)math.ceil(boundsSize.x / latticeDimensions.x);
+        int ny =(int)math.ceil(boundsSize.y / latticeDimensions.y);
+        int nz =(int)math.ceil(boundsSize.z / latticeDimensions.z);
         latticeResolution = new int3(nx, ny, nz);
-        latticeDimensions = new float3(
-            boundsSize.x / nx,
-            boundsSize.y / ny,
-            boundsSize.z / nz
-        );
+
+        float3 finalBoundsSize = latticeDimensions * latticeResolution;
+        float3 boundsDifference = finalBoundsSize - boundsSize;
+        latticeNegativeCorner = (float3)visualMeshBounds.min
+                                - new float3(EPSILON, EPSILON, EPSILON)
+                                - boundsDifference * 0.5f;
 
         // Lattice setup
         int maxNumberOfCells = latticeResolution.x * latticeResolution.y * latticeResolution.z;

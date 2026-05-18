@@ -9,7 +9,7 @@ using Unity.Jobs;
 public class PhysicsSolver : MonoBehaviour
 {
     // --------------Public data--------------
-    public float3 targetLatticeDimensions = new float3(1,1,1);
+    public float targetLatticeDimensions = 0.25f;
     public float substeps = 10;
     public float3 gravity = Physics.gravity;
     public float damping = 0;
@@ -28,11 +28,12 @@ public class PhysicsSolver : MonoBehaviour
     private NativeList<Particle>    particles;
 
     // --------------Cell data--------------
-    private NativeList<LatticeCell> latticeCells;
-    private NativeList<int>         latticeCellBodyRef;
-    private List<int>               latticeColReferences;
-    private List<int>               latticeVisReferences;
-    private int[]                   globalChlCount;
+    private NativeList<LatticeCell>    latticeCells;
+    private NativeSlice<LatticeCell>[] cellChannelSlices;
+    private NativeList<int>            latticeCellBodyRef;
+    private List<int>                  latticeColReferences;
+    private List<int>                  latticeVisReferences;
+    private int[]                      globalChlCount;
 
     // --------------Collision data--------------
     private NativeList<DynamicVertex>   collisionVertices;
@@ -52,9 +53,25 @@ public class PhysicsSolver : MonoBehaviour
     private void FixedUpdate()
     {
         if (!initialised) return;
-        JobHandle handle = default;
-        float dt = Time.fixedDeltaTime / substeps;
 
+        // Helper data
+        float dt = Time.fixedDeltaTime / substeps;
+        float dtSq = dt * dt;
+        float invDt = 1f / dt;
+        float invDtSq = invDt * invDt;
+        // Particle job
+        float3 gravityDt = gravity * dt;
+        // Distance constraint job
+        float edgeLen     = targetLatticeDimensions;
+        float faceDiagLen = targetLatticeDimensions * 1.41421356f;
+        float bodyDiagLen = targetLatticeDimensions * 1.7320508f;
+        // Volume constraint job
+        float cellVolume = math.pow(targetLatticeDimensions, 3);
+        float bigTetVol = cellVolume * (1f/3f);
+        float smallTetsVol = cellVolume * (1f/6f);
+
+        // Job assigment helper data
+        JobHandle handle = default;
         int particleCount = particles.Length;
         int visualWraperCount = visualWrapers.Length;
         int collisionWraperCount = collisionWrapers.Length;
@@ -63,8 +80,9 @@ public class PhysicsSolver : MonoBehaviour
         {
             ParticleUpdateJob particleUpdateJob = new ParticleUpdateJob
             {
-                gravity = gravity,
-                dt = dt, particles = particles.AsArray()  
+                gravityDt = gravityDt,
+                dt = dt,
+                particles = particles.AsArray()
             };
             handle = particleUpdateJob.Schedule(particleCount, 32, handle);
 
@@ -73,9 +91,17 @@ public class PhysicsSolver : MonoBehaviour
             {
                 DistConsJob distConsJob = new DistConsJob
                 {
-                    dt = dt, damping = damping, channelStart = channelStart, latticeCells = latticeCells.AsArray(),
-                    latticeCellBodyRef = latticeCellBodyRef.AsArray(), bodyLatticeDimensions = bodyLatticeDimensions.AsArray(),
-                    bodyDistConsCompliance = bodyDistConsCompliance.AsArray(), particles = particles.AsArray()
+                    dtSq = dtSq,
+                    invDt = invDt,
+                    invDtSq = invDtSq,
+                    damping = damping,
+                    edgeLen = edgeLen,
+                    faceDiagLen = faceDiagLen,
+                    bodyDiagLen = bodyDiagLen,
+                    latticeCells = cellChannelSlices[chl],
+                    latticeCellBodyRef = latticeCellBodyRef.AsArray(),
+                    bodyDistConsCompliance = bodyDistConsCompliance.AsArray(),
+                    particles = particles.AsArray()
                 };
                 handle = distConsJob.Schedule(globalChlCount[chl], 1, handle);
 
@@ -87,9 +113,16 @@ public class PhysicsSolver : MonoBehaviour
             {
                 VolConsJob volConsJob = new VolConsJob
                 {
-                    dt = dt, damping = damping, channelStart = channelStart, latticeCells = latticeCells.AsArray(),
-                    latticeCellBodyRef = latticeCellBodyRef.AsArray(), bodyLatticeDimensions = bodyLatticeDimensions.AsArray(),
-                    bodyVolConsCompliance = bodyVolConsCompliance.AsArray(), particles = particles.AsArray()
+                    dtSq = dtSq,
+                    invDt = invDt,
+                    invDtSq = invDtSq,
+                    damping = damping,
+                    bigTetVol = bigTetVol,
+                    smallTetsVol = smallTetsVol,
+                    latticeCells = cellChannelSlices[chl],
+                    latticeCellBodyRef = latticeCellBodyRef.AsArray(),
+                    bodyVolConsCompliance = bodyVolConsCompliance.AsArray(),
+                    particles = particles.AsArray()
                 };
                 handle = volConsJob.Schedule(globalChlCount[chl], 1, handle);
 
@@ -98,8 +131,10 @@ public class PhysicsSolver : MonoBehaviour
 
             BasicPlaneColJob basicPlaneColJob = new BasicPlaneColJob
             {
-                yPlanePos = 0f, latticeCells = latticeCells.AsArray(),
-                collisionVertices = collisionVertices.AsArray(), collisionWrapers = collisionWrapers.AsArray(),
+                yPlanePos = 0f,
+                latticeCells = latticeCells.AsArray(),
+                collisionVertices = collisionVertices.AsArray(),
+                collisionWrapers = collisionWrapers.AsArray(),
                 particles = particles.AsArray()
             };
             handle = basicPlaneColJob.Schedule(collisionWraperCount, 1, handle);
@@ -107,9 +142,12 @@ public class PhysicsSolver : MonoBehaviour
 
         VisVertsUpdateJob visVertsUpdateJob = new VisVertsUpdateJob
         {
-            particles = particles.AsArray(), latticeCells = latticeCells.AsArray(),
-            visualVerticesData = visualVerticesData.AsArray(), visualVerticesOffset = visualVerticesOffset.AsArray(),
-            visualVertices = visualVertices.AsArray(), visualWrapers = visualWrapers.AsArray()
+            particles = particles.AsArray(),
+            latticeCells = latticeCells.AsArray(),
+            visualVerticesData = visualVerticesData.AsArray(),
+            visualVerticesOffset = visualVerticesOffset.AsArray(),
+            visualVertices = visualVertices.AsArray(),
+            visualWrapers = visualWrapers.AsArray()
         };
         handle = visVertsUpdateJob.Schedule(visualWraperCount, 1, handle);
         handle.Complete();
@@ -271,6 +309,13 @@ public class PhysicsSolver : MonoBehaviour
         bodyDistConsCompliance.Add(latticeBody.distanceCompliance);
         bodyVolConsCompliance.Add(latticeBody.volumeCompliance);
 
+        int channelStart = 0;
+        for (int chl = 0; chl < 8; chl++)
+        {
+            cellChannelSlices[chl] = new NativeSlice<LatticeCell>(latticeCells.AsArray(), channelStart, globalChlCount[chl]);
+            channelStart += globalChlCount[chl];
+        }
+
         // Update the cell references
         UpdateCellVertReferences();
         // Testing and finally finding that bug [05.03.2026]
@@ -318,9 +363,9 @@ public class PhysicsSolver : MonoBehaviour
 
         // Cell data allocation
         latticeCells = new NativeList<LatticeCell>(Allocator.Persistent);
+        cellChannelSlices = new NativeSlice<LatticeCell>[8];
         latticeCellBodyRef = new NativeList<int>(Allocator.Persistent);
         globalChlCount = new int[8];
-        for (int i = 0; i < 8; i++) globalChlCount[i] = 0;
         latticeColReferences = new List<int>();
         latticeVisReferences = new List<int>();
 
