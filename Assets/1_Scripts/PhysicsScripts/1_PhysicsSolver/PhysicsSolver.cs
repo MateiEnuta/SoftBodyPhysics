@@ -9,7 +9,7 @@ using Unity.Jobs;
 public class PhysicsSolver : MonoBehaviour
 {
     // --------------Public data--------------
-    public float3 targetLatticeDimensions = new float3(1,1,1);
+    public float targetLatticeDimensions = 0.25f;
     public float substeps = 10;
     public float3 gravity = Physics.gravity;
     public float damping = 0;
@@ -73,26 +73,15 @@ public class PhysicsSolver : MonoBehaviour
             {
                 DistConsJob distConsJob = new DistConsJob
                 {
-                    dt = dt, damping = damping, channelStart = channelStart, latticeCells = latticeCells.AsArray(),
-                    latticeCellBodyRef = latticeCellBodyRef.AsArray(), bodyLatticeDimensions = bodyLatticeDimensions.AsArray(),
-                    bodyDistConsCompliance = bodyDistConsCompliance.AsArray(), particles = particles.AsArray()
+                    dt = dt, damping = damping, channelStart = channelStart,
+                    latticeDimensions = targetLatticeDimensions,
+                    latticeCells = latticeCells.AsArray(),
+                    latticeCellBodyRef = latticeCellBodyRef.AsArray(),
+                    bodyDistConsCompliance = bodyDistConsCompliance.AsArray(),
+                    bodyVolConsCompliance = bodyVolConsCompliance.AsArray(),
+                    particles = particles.AsArray()
                 };
                 handle = distConsJob.Schedule(globalChlCount[chl], 1, handle);
-
-                channelStart += globalChlCount[chl];
-            }
-
-            channelStart = 0;
-            for (int chl = 0; chl < 8; chl++)
-            {
-                VolConsJob volConsJob = new VolConsJob
-                {
-                    dt = dt, damping = damping, channelStart = channelStart, latticeCells = latticeCells.AsArray(),
-                    latticeCellBodyRef = latticeCellBodyRef.AsArray(), bodyLatticeDimensions = bodyLatticeDimensions.AsArray(),
-                    bodyVolConsCompliance = bodyVolConsCompliance.AsArray(), particles = particles.AsArray()
-                };
-                handle = volConsJob.Schedule(globalChlCount[chl], 1, handle);
-
                 channelStart += globalChlCount[chl];
             }
 
