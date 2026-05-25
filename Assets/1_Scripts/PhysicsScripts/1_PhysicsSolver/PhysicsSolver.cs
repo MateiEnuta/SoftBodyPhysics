@@ -68,20 +68,36 @@ public class PhysicsSolver : MonoBehaviour
             };
             handle = particleUpdateJob.Schedule(particleCount, 32, handle);
 
+            // int channelStart = 0;
+            // for (int chl = 0; chl < 8; chl++)
+            // {
+            //     DistConsJob distConsJob = new DistConsJob
+            //     {
+            //         dt = dt, damping = damping, channelStart = channelStart,
+            //         latticeDimensions = targetLatticeDimensions,
+            //         latticeCells = latticeCells.AsArray(),
+            //         latticeCellBodyRef = latticeCellBodyRef.AsArray(),
+            //         bodyDistConsCompliance = bodyDistConsCompliance.AsArray(),
+            //         bodyVolConsCompliance = bodyVolConsCompliance.AsArray(),
+            //         particles = particles.AsArray()
+            //     };
+            //     handle = distConsJob.Schedule(globalChlCount[chl], 1, handle);
+            //     channelStart += globalChlCount[chl];
+            // }
+
             int channelStart = 0;
             for (int chl = 0; chl < 8; chl++)
             {
-                DistConsJob distConsJob = new DistConsJob
+                ShapeMatchingJob shapeMatchingJob = new ShapeMatchingJob
                 {
                     dt = dt, damping = damping, channelStart = channelStart,
                     latticeDimensions = targetLatticeDimensions,
                     latticeCells = latticeCells.AsArray(),
                     latticeCellBodyRef = latticeCellBodyRef.AsArray(),
-                    bodyDistConsCompliance = bodyDistConsCompliance.AsArray(),
-                    bodyVolConsCompliance = bodyVolConsCompliance.AsArray(),
+                    bodyShpMatchCompliance = bodyVolConsCompliance.AsArray(),
                     particles = particles.AsArray()
                 };
-                handle = distConsJob.Schedule(globalChlCount[chl], 1, handle);
+                handle = shapeMatchingJob.Schedule(globalChlCount[chl], 1, handle);
                 channelStart += globalChlCount[chl];
             }
 

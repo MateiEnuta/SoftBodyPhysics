@@ -1188,7 +1188,7 @@ MonoBehaviour:
   collisionMesh: {fileID: 0}
   mass: 1
   distanceCompliance: 0
-  volumeCompliance: 0
+  volumeCompliance: 67
 --- !u!23 &696584653
 MeshRenderer:
   m_ObjectHideFlags: 0
