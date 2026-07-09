@@ -81,10 +81,11 @@ public class LatticePreprocessor
         this.latticeBody = latticeBody;
 
         // Calculate bounds
-        Bounds visualMeshBounds = latticeBody.visualMesh.bounds;
         latticeBody.visualMesh.MarkDynamic();
         latticeBody.visualMesh.RecalculateBounds();
         latticeBody.visualMesh.RecalculateNormals();
+        
+        Bounds visualMeshBounds = latticeBody.visualMesh.bounds;
         const float EPSILON = 1e-4f;
 
         float3 boundsSize = (float3)visualMeshBounds.size

@@ -17,9 +17,9 @@ public class PhysicsSolver : MonoBehaviour
 
     // --------------Solver data--------------
     private bool initialised = false;
+    private float3x3 AqqInverse;
 
     // --------------Lattice bodies data--------------
-    private NativeList<float3> bodyLatticeDimensions;
     private NativeList<float>  bodyDistConsCompliance;
     private NativeList<float>  bodyVolConsCompliance;
     private List<BodyWraper>   bodyWrapers;
@@ -68,30 +68,14 @@ public class PhysicsSolver : MonoBehaviour
             };
             handle = particleUpdateJob.Schedule(particleCount, 32, handle);
 
-            // int channelStart = 0;
-            // for (int chl = 0; chl < 8; chl++)
-            // {
-            //     DistConsJob distConsJob = new DistConsJob
-            //     {
-            //         dt = dt, damping = damping, channelStart = channelStart,
-            //         latticeDimensions = targetLatticeDimensions,
-            //         latticeCells = latticeCells.AsArray(),
-            //         latticeCellBodyRef = latticeCellBodyRef.AsArray(),
-            //         bodyDistConsCompliance = bodyDistConsCompliance.AsArray(),
-            //         bodyVolConsCompliance = bodyVolConsCompliance.AsArray(),
-            //         particles = particles.AsArray()
-            //     };
-            //     handle = distConsJob.Schedule(globalChlCount[chl], 1, handle);
-            //     channelStart += globalChlCount[chl];
-            // }
-
             int channelStart = 0;
             for (int chl = 0; chl < 8; chl++)
             {
                 ShapeMatchingJob shapeMatchingJob = new ShapeMatchingJob
                 {
                     dt = dt, damping = damping, channelStart = channelStart,
-                    latticeDimensions = targetLatticeDimensions,
+                    halfD = targetLatticeDimensions * 0.5f,
+                    AqqInverse = AqqInverse,
                     latticeCells = latticeCells.AsArray(),
                     latticeCellBodyRef = latticeCellBodyRef.AsArray(),
                     bodyShpMatchCompliance = bodyVolConsCompliance.AsArray(),
@@ -272,9 +256,10 @@ public class PhysicsSolver : MonoBehaviour
 
         // Add the new body wraper and body data
         bodyWrapers.Add(bodyWraper);
-        bodyLatticeDimensions.Add(currentProcess.latticeDimensions * latticeBody.transform.lossyScale);
         bodyDistConsCompliance.Add(latticeBody.distanceCompliance);
         bodyVolConsCompliance.Add(latticeBody.volumeCompliance);
+        
+        latticeBody.transform.localScale = Vector3.one;
 
         // Update the cell references
         UpdateCellVertReferences();
@@ -311,8 +296,22 @@ public class PhysicsSolver : MonoBehaviour
         if (initialised) return;
         initialised = true;
 
+        // Precompute Aqq matrix and store it's inverse
+        float halfD = targetLatticeDimensions * 0.5f;
+        float3x3 Aqq = ShapeMatchingMath.Zero3x3();
+        Aqq += ShapeMatchingMath.OuterProduct(new float3(-halfD, -halfD, -halfD), new float3(-halfD, -halfD, -halfD));
+        Aqq += ShapeMatchingMath.OuterProduct(new float3( halfD, -halfD, -halfD), new float3( halfD, -halfD, -halfD));
+        Aqq += ShapeMatchingMath.OuterProduct(new float3(-halfD,  halfD, -halfD), new float3(-halfD,  halfD, -halfD));
+        Aqq += ShapeMatchingMath.OuterProduct(new float3( halfD,  halfD, -halfD), new float3( halfD,  halfD, -halfD));
+        Aqq += ShapeMatchingMath.OuterProduct(new float3(-halfD, -halfD,  halfD), new float3(-halfD, -halfD,  halfD));
+        Aqq += ShapeMatchingMath.OuterProduct(new float3( halfD, -halfD,  halfD), new float3( halfD, -halfD,  halfD));
+        Aqq += ShapeMatchingMath.OuterProduct(new float3(-halfD,  halfD,  halfD), new float3(-halfD,  halfD,  halfD));
+        Aqq += ShapeMatchingMath.OuterProduct(new float3( halfD,  halfD,  halfD), new float3( halfD,  halfD,  halfD));
+        AqqInverse = math.inverse(Aqq);
+        // Debug.Log(AqqInverse);
+
+
         // Body data
-        bodyLatticeDimensions = new NativeList<float3>(Allocator.Persistent);
         bodyDistConsCompliance = new NativeList<float>(Allocator.Persistent);
         bodyVolConsCompliance = new NativeList<float>(Allocator.Persistent);
         bodyWrapers = new List<BodyWraper>();
@@ -345,7 +344,6 @@ public class PhysicsSolver : MonoBehaviour
     private void DisposeLists()
     {
         // Dispose of all native lists
-        if (bodyLatticeDimensions.IsCreated) bodyLatticeDimensions.Dispose();
         if (bodyDistConsCompliance.IsCreated) bodyDistConsCompliance.Dispose();
         if (bodyVolConsCompliance.IsCreated) bodyVolConsCompliance.Dispose();
         if (particles.IsCreated) particles.Dispose();
