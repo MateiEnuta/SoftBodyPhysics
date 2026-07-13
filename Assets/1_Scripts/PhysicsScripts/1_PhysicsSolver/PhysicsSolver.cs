@@ -14,13 +14,13 @@ public class PhysicsSolver : MonoBehaviour
     public float3 gravity = Physics.gravity;
     public float damping = 0;
     public bool debugLatticeCells = false, debugColMesh = false, debugVisVerts = false;
+    public float numberOfCells;
 
     // --------------Solver data--------------
     private bool initialised = false;
-    private float3x3 AqqInverse;
 
     // --------------Lattice bodies data--------------
-    private NativeList<float>  bodyDistConsCompliance;
+    private NativeList<float>  bodyDeviConsCompliance;
     private NativeList<float>  bodyVolConsCompliance;
     private List<BodyWraper>   bodyWrapers;
 
@@ -64,7 +64,7 @@ public class PhysicsSolver : MonoBehaviour
             ParticleUpdateJob particleUpdateJob = new ParticleUpdateJob
             {
                 gravity = gravity,
-                dt = dt, particles = particles.AsArray()  
+                dt = dt, particles = particles.AsArray()
             };
             handle = particleUpdateJob.Schedule(particleCount, 32, handle);
 
@@ -75,10 +75,10 @@ public class PhysicsSolver : MonoBehaviour
                 {
                     dt = dt, damping = damping, channelStart = channelStart,
                     halfD = targetLatticeDimensions * 0.5f,
-                    AqqInverse = AqqInverse,
                     latticeCells = latticeCells.AsArray(),
                     latticeCellBodyRef = latticeCellBodyRef.AsArray(),
-                    bodyShpMatchCompliance = bodyVolConsCompliance.AsArray(),
+                    bodyDeviConsCompliance = bodyDeviConsCompliance.AsArray(),
+                    bodyVolConsCompliance = bodyVolConsCompliance.AsArray(),
                     particles = particles.AsArray()
                 };
                 handle = shapeMatchingJob.Schedule(globalChlCount[chl], 1, handle);
@@ -256,10 +256,11 @@ public class PhysicsSolver : MonoBehaviour
 
         // Add the new body wraper and body data
         bodyWrapers.Add(bodyWraper);
-        bodyDistConsCompliance.Add(latticeBody.distanceCompliance);
+        bodyDeviConsCompliance.Add(latticeBody.deviatoricCompliance);
         bodyVolConsCompliance.Add(latticeBody.volumeCompliance);
         
         latticeBody.transform.localScale = Vector3.one;
+        numberOfCells = latticeCells.Length;
 
         // Update the cell references
         UpdateCellVertReferences();
@@ -295,24 +296,11 @@ public class PhysicsSolver : MonoBehaviour
         // Only initialise once
         if (initialised) return;
         initialised = true;
-
-        // Precompute Aqq matrix and store it's inverse
-        float halfD = targetLatticeDimensions * 0.5f;
-        float3x3 Aqq = ShapeMatchingMath.Zero3x3();
-        Aqq += ShapeMatchingMath.OuterProduct(new float3(-halfD, -halfD, -halfD), new float3(-halfD, -halfD, -halfD));
-        Aqq += ShapeMatchingMath.OuterProduct(new float3( halfD, -halfD, -halfD), new float3( halfD, -halfD, -halfD));
-        Aqq += ShapeMatchingMath.OuterProduct(new float3(-halfD,  halfD, -halfD), new float3(-halfD,  halfD, -halfD));
-        Aqq += ShapeMatchingMath.OuterProduct(new float3( halfD,  halfD, -halfD), new float3( halfD,  halfD, -halfD));
-        Aqq += ShapeMatchingMath.OuterProduct(new float3(-halfD, -halfD,  halfD), new float3(-halfD, -halfD,  halfD));
-        Aqq += ShapeMatchingMath.OuterProduct(new float3( halfD, -halfD,  halfD), new float3( halfD, -halfD,  halfD));
-        Aqq += ShapeMatchingMath.OuterProduct(new float3(-halfD,  halfD,  halfD), new float3(-halfD,  halfD,  halfD));
-        Aqq += ShapeMatchingMath.OuterProduct(new float3( halfD,  halfD,  halfD), new float3( halfD,  halfD,  halfD));
-        AqqInverse = math.inverse(Aqq);
-        // Debug.Log(AqqInverse);
+        numberOfCells = 0;
 
 
         // Body data
-        bodyDistConsCompliance = new NativeList<float>(Allocator.Persistent);
+        bodyDeviConsCompliance = new NativeList<float>(Allocator.Persistent);
         bodyVolConsCompliance = new NativeList<float>(Allocator.Persistent);
         bodyWrapers = new List<BodyWraper>();
 
@@ -344,7 +332,7 @@ public class PhysicsSolver : MonoBehaviour
     private void DisposeLists()
     {
         // Dispose of all native lists
-        if (bodyDistConsCompliance.IsCreated) bodyDistConsCompliance.Dispose();
+        if (bodyDeviConsCompliance.IsCreated) bodyDeviConsCompliance.Dispose();
         if (bodyVolConsCompliance.IsCreated) bodyVolConsCompliance.Dispose();
         if (particles.IsCreated) particles.Dispose();
         if (latticeCells.IsCreated) latticeCells.Dispose();
