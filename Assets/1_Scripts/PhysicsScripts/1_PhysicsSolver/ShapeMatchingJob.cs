@@ -37,7 +37,7 @@ public struct ShapeMatchingJob : IJobParallelFor
         float deviatoricCompliance = bodyDeviConsCompliance[latticeCellBodyRef[index]];
         float volumeCompliance = bodyVolConsCompliance[latticeCellBodyRef[index]];
 
-        SolveTetNeoHookean(
+        SolveTetStrainVolume(
             v0, v3, v6, v5,
             initPosV0,
             initPosV3,
@@ -47,7 +47,7 @@ public struct ShapeMatchingJob : IJobParallelFor
             volumeCompliance
         );
 
-        SolveTetNeoHookean(
+        SolveTetStrainVolume(
             v0, v5, v6, v4,
             initPosV0,
             initPosV5,
@@ -57,7 +57,7 @@ public struct ShapeMatchingJob : IJobParallelFor
             volumeCompliance
         );
 
-        SolveTetNeoHookean(
+        SolveTetStrainVolume(
             v0, v6, v3, v2,
             initPosV0,
             initPosV6,
@@ -67,7 +67,7 @@ public struct ShapeMatchingJob : IJobParallelFor
             volumeCompliance
         );
 
-        SolveTetNeoHookean(
+        SolveTetStrainVolume(
             v5, v3, v6, v7,
             initPosV5,
             initPosV3,
@@ -77,7 +77,7 @@ public struct ShapeMatchingJob : IJobParallelFor
             volumeCompliance
         );
 
-        SolveTetNeoHookean(
+        SolveTetStrainVolume(
             v0, v3, v5, v1,
             initPosV0,
             initPosV3,
@@ -87,7 +87,7 @@ public struct ShapeMatchingJob : IJobParallelFor
             volumeCompliance
         );
     }
-
+#region Neo-Hookean
     private void SolveTetNeoHookean(
         int v0, int v1, int v2, int v3,
         float3 initialX0,
@@ -183,6 +183,165 @@ public struct ShapeMatchingJob : IJobParallelFor
 
         SolveScalarXPBD(v0, v1, v2, v3, C, g0, g1, g2, g3, deviatoricCompliance);
     }
+#endregion
+
+#region Strain-Based
+    private void SolveTetStrainVolume(
+        int v0, int v1, int v2, int v3,
+        float3 initialX0,
+        float3 initialX1,
+        float3 initialX2,
+        float3 initialX3,
+        float deviatoricCompliance,
+        float volumeCompliance
+    )
+    {
+        float3x3 Dm = new float3x3(
+            initialX1 - initialX0,
+            initialX2 - initialX0,
+            initialX3 - initialX0
+        );
+
+        float detDm = math.determinant(Dm);
+        if (math.abs(detDm) < 1e-9f)
+            return;
+
+        float3x3 invDm = math.inverse(Dm);
+
+        float3x3 Ds = new float3x3(
+            particles[v1].currentPosition - particles[v0].currentPosition,
+            particles[v2].currentPosition - particles[v0].currentPosition,
+            particles[v3].currentPosition - particles[v0].currentPosition
+        );
+        float3x3 F = math.mul(Ds, invDm);
+
+        SolveStretchConstraint(v0, v1, v2, v3, invDm, F, 0, deviatoricCompliance);
+        SolveStretchConstraint(v0, v1, v2, v3, invDm, F, 1, deviatoricCompliance);
+        SolveStretchConstraint(v0, v1, v2, v3, invDm, F, 2, deviatoricCompliance);
+
+        Ds = new float3x3(
+            particles[v1].currentPosition - particles[v0].currentPosition,
+            particles[v2].currentPosition - particles[v0].currentPosition,
+            particles[v3].currentPosition - particles[v0].currentPosition
+        );
+        F = math.mul(Ds, invDm);
+
+        SolveShearConstraint(v0, v1, v2, v3, invDm, F, 0, 1, deviatoricCompliance * 2f);
+        SolveShearConstraint(v0, v1, v2, v3, invDm, F, 0, 2, deviatoricCompliance * 2f);
+        SolveShearConstraint(v0, v1, v2, v3, invDm, F, 1, 2, deviatoricCompliance * 2f);
+
+        Ds = new float3x3(
+            particles[v1].currentPosition - particles[v0].currentPosition,
+            particles[v2].currentPosition - particles[v0].currentPosition,
+            particles[v3].currentPosition - particles[v0].currentPosition
+        );
+        F = math.mul(Ds, invDm);
+
+        SolveVolumeConstraintFromF(v0, v1, v2, v3, invDm, F, volumeCompliance);
+    }
+
+    private void SolveStretchConstraint(
+        int v0, int v1, int v2, int v3,
+        float3x3 invDm,
+        float3x3 F,
+        int columnIndex,
+        float compliance
+    )
+    {
+        float3 f = columnIndex == 0 ? F.c0 : columnIndex == 1 ? F.c1 : F.c2;
+        float len = math.length(f);
+        if (len < 1e-8f)
+            return;
+
+        float C = len - 1f;
+
+        float3 q = columnIndex == 0 ? invDm.c0 : columnIndex == 1 ? invDm.c1 : invDm.c2;
+
+        float3 g1 = q.x * (f / len);
+        float3 g2 = q.y * (f / len);
+        float3 g3 = q.z * (f / len);
+        float3 g0 = -(g1 + g2 + g3);
+
+        SolveScalarXPBD(v0, v1, v2, v3, C, g0, g1, g2, g3, compliance);
+    }
+
+    private void SolveShearConstraint(
+        int v0, int v1, int v2, int v3,
+        float3x3 invDm,
+        float3x3 F,
+        int i,
+        int j,
+        float compliance
+    )
+    {
+        float3 fi = i == 0 ? F.c0 : (i == 1 ? F.c1 : F.c2);
+        float3 fj = j == 0 ? F.c0 : (j == 1 ? F.c1 : F.c2);
+
+        float C = math.dot(fi, fj);
+
+        float3 qi = i == 0 ? invDm.c0 : (i == 1 ? invDm.c1 : invDm.c2);
+        float3 qj = j == 0 ? invDm.c0 : (j == 1 ? invDm.c1 : invDm.c2);
+
+        float3 g1 = qi.x * fj + qj.x * fi;
+        float3 g2 = qi.y * fj + qj.y * fi;
+        float3 g3 = qi.z * fj + qj.z * fi;
+        float3 g0 = -(g1 + g2 + g3);
+
+        SolveScalarXPBD(v0, v1, v2, v3, C, g0, g1, g2, g3, compliance);
+    }
+
+    private void SolveVolumeConstraintFromF(
+        int v0, int v1, int v2, int v3,
+        float3x3 invDm,
+        float3x3 F,
+        float compliance
+    )
+    {
+        float J = math.determinant(F);
+        float C = J - 1f;
+
+        float3 cof0 = math.cross(F.c1, F.c2);
+        float3 cof1 = math.cross(F.c2, F.c0);
+        float3 cof2 = math.cross(F.c0, F.c1);
+
+        float3 c0 = invDm.c0;
+        float3 c1 = invDm.c1;
+        float3 c2 = invDm.c2;
+
+        float3 g1 = c0.x * cof0 + c1.x * cof1 + c2.x * cof2;
+        float3 g2 = c0.y * cof0 + c1.y * cof1 + c2.y * cof2;
+        float3 g3 = c0.z * cof0 + c1.z * cof1 + c2.z * cof2;
+        float3 g0 = -(g1 + g2 + g3);
+
+        SolveScalarXPBD(v0, v1, v2, v3, C, g0, g1, g2, g3, compliance);
+    }
+
+    private void SolveTetVolumeDirect(
+        int v0, int v1, int v2, int v3,
+        float restVolume,
+        float compliance
+    )
+    {
+        float3 x0 = particles[v0].currentPosition;
+        float3 x1 = particles[v1].currentPosition;
+        float3 x2 = particles[v2].currentPosition;
+        float3 x3 = particles[v3].currentPosition;
+
+        float3 e1 = x1 - x0;
+        float3 e2 = x2 - x0;
+        float3 e3 = x3 - x0;
+
+        float volume = math.dot(e1, math.cross(e2, e3)) / 6f;
+        float C = volume - restVolume;
+
+        float3 g1 = math.cross(e2, e3) / 6f;
+        float3 g2 = math.cross(e3, e1) / 6f;
+        float3 g3 = math.cross(e1, e2) / 6f;
+        float3 g0 = -(g1 + g2 + g3);
+
+        SolveScalarXPBD(v0, v1, v2, v3, C, g0, g1, g2, g3, compliance);
+    }
+#endregion
 
     private void SolveScalarXPBD(
         int v0, int v1, int v2, int v3,
@@ -215,19 +374,22 @@ public struct ShapeMatchingJob : IJobParallelFor
 
         if (damping > 0f)
         {
-            float3 vel0 = (particles[v0].currentPosition - particles[v0].previousPosition) / dt;
-            float3 vel1 = (particles[v1].currentPosition - particles[v1].previousPosition) / dt;
-            float3 vel2 = (particles[v2].currentPosition - particles[v2].previousPosition) / dt;
-            float3 vel3 = (particles[v3].currentPosition - particles[v3].previousPosition) / dt;
+            float betaTilde = damping * dt * dt;
+            float gamma = alpha * betaTilde / dt;
 
-            float constraintVelocity =
-                math.dot(g0, vel0) +
-                math.dot(g1, vel1) +
-                math.dot(g2, vel2) +
-                math.dot(g3, vel3);
+            float3 vel1 = particles[v0].currentPosition - particles[v0].previousPosition;
+            float3 vel2 = particles[v1].currentPosition - particles[v1].previousPosition;
+            float3 vel3 = particles[v2].currentPosition - particles[v2].previousPosition;
+            float3 vel4 = particles[v3].currentPosition - particles[v3].previousPosition;
 
-            dampingTerm = damping * constraintVelocity;
-            denom += damping * gradTerm;
+            float velocitySum =
+                math.dot(g0, vel1) +
+                math.dot(g1, vel2) +
+                math.dot(g2, vel3) +
+                math.dot(g3, vel4);
+
+            dampingTerm = gamma * velocitySum;
+            denom *= 1f + gamma;
         }
 
         float deltaLambda = -(C + dampingTerm) / denom;

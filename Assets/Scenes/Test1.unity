@@ -415,8 +415,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0.1
-  volumeCompliance: 0.1
+  deviatoricCompliance: 0.001
+  volumeCompliance: 0
 --- !u!136 &146282953
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -1686,8 +1686,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 67
-  volumeCompliance: 1
+  deviatoricCompliance: 150
+  volumeCompliance: 0.67
 --- !u!135 &809660619
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -2577,8 +2577,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 167
-  volumeCompliance: 1
+  deviatoricCompliance: 150
+  volumeCompliance: 0.67
 --- !u!135 &1036851458
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -3691,7 +3691,7 @@ MonoBehaviour:
     y: -9.81
     z: 0
   damping: 0
-  debugLatticeCells: 1
+  debugLatticeCells: 0
   debugColMesh: 0
   debugVisVerts: 0
   numberOfCells: 0
@@ -4507,8 +4507,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0.1
-  volumeCompliance: 0.1
+  deviatoricCompliance: 0.001
+  volumeCompliance: 0
 --- !u!136 &1846875964
 CapsuleCollider:
   m_ObjectHideFlags: 0
