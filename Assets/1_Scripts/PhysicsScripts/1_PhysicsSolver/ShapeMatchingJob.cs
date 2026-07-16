@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using SolverStructs;
 using Unity.Burst;
 using Unity.Collections;
@@ -20,373 +21,685 @@ public struct ShapeMatchingJob : IJobParallelFor
     public void Execute(int index)
     {
         index += channelStart;
+        // SolveShapeMatching(index);
 
         LatticeCell cell = latticeCells[index];
-
         int v0 = cell.v0; int v1 = cell.v1; int v2 = cell.v2; int v3 = cell.v3;
         int v4 = cell.v4; int v5 = cell.v5; int v6 = cell.v6; int v7 = cell.v7;
-        float3 initPosV0 = new float3(-halfD, -halfD, -halfD);
-        float3 initPosV1 = new float3( halfD, -halfD, -halfD);
-        float3 initPosV2 = new float3(-halfD,  halfD, -halfD);
-        float3 initPosV3 = new float3( halfD,  halfD, -halfD);
-        float3 initPosV4 = new float3(-halfD, -halfD,  halfD);
-        float3 initPosV5 = new float3( halfD, -halfD,  halfD);
-        float3 initPosV6 = new float3(-halfD,  halfD,  halfD);
-        float3 initPosV7 = new float3( halfD,  halfD,  halfD);
+        
+        float3 q0 = new float3(-halfD, -halfD, -halfD);
+        float3 q1 = new float3( halfD, -halfD, -halfD);
+        float3 q2 = new float3(-halfD,  halfD, -halfD);
+        float3 q3 = new float3( halfD,  halfD, -halfD);
+        float3 q4 = new float3(-halfD, -halfD,  halfD);
+        float3 q5 = new float3( halfD, -halfD,  halfD);
+        float3 q6 = new float3(-halfD,  halfD,  halfD);
+        float3 q7 = new float3( halfD,  halfD,  halfD);
 
-        float deviatoricCompliance = bodyDeviConsCompliance[latticeCellBodyRef[index]];
-        float volumeCompliance = bodyVolConsCompliance[latticeCellBodyRef[index]];
-
-        SolveTetStrainVolume(
-            v0, v3, v6, v5,
-            initPosV0,
-            initPosV3,
-            initPosV6,
-            initPosV5,
-            deviatoricCompliance,
-            volumeCompliance
-        );
-
-        SolveTetStrainVolume(
-            v0, v5, v6, v4,
-            initPosV0,
-            initPosV5,
-            initPosV6,
-            initPosV4,
-            deviatoricCompliance,
-            volumeCompliance
-        );
-
-        SolveTetStrainVolume(
-            v0, v6, v3, v2,
-            initPosV0,
-            initPosV6,
-            initPosV3,
-            initPosV2,
-            deviatoricCompliance,
-            volumeCompliance
-        );
-
-        SolveTetStrainVolume(
-            v5, v3, v6, v7,
-            initPosV5,
-            initPosV3,
-            initPosV6,
-            initPosV7,
-            deviatoricCompliance,
-            volumeCompliance
-        );
-
-        SolveTetStrainVolume(
-            v0, v3, v5, v1,
-            initPosV0,
-            initPosV3,
-            initPosV5,
-            initPosV1,
-            deviatoricCompliance,
-            volumeCompliance
-        );
-    }
-#region Neo-Hookean
-    private void SolveTetNeoHookean(
-        int v0, int v1, int v2, int v3,
-        float3 initialX0,
-        float3 initialX1,
-        float3 initialX2,
-        float3 initialX3,
-        float deviatoricCompliance,
-        float volumeCompliance
-    )
-    {
-        float3x3 invDs = math.inverse(new float3x3(
-            initialX0 - initialX3,
-            initialX1 - initialX3,
-            initialX2 - initialX3
-        ));
-
-        SolveDeviatoricConstraint(v0, v1, v2, v3, deviatoricCompliance, invDs);
-        SolveVolumeConstraint(v0, v1, v2, v3, volumeCompliance, invDs);
-    }
-
-    private void SolveVolumeConstraint(
-        int v0, int v1, int v2, int v3,
-        float volumeCompliance,
-        float3x3 invDs
-    )
-    {
-        float3x3 X = new float3x3(
-            particles[v0].currentPosition - particles[v3].currentPosition,
-            particles[v1].currentPosition - particles[v3].currentPosition,
-            particles[v2].currentPosition - particles[v3].currentPosition
-        );
-        float3x3 F = math.mul(X, invDs);
-
-        float3 f1 = F.c0;
-        float3 f2 = F.c1;
-        float3 f3 = F.c2;
-
-        float C = math.determinant(F) - 1f;
-
-        float3x3 H = new float3x3(
-            math.cross(f2, f3),
-            math.cross(f3, f1),
-            math.cross(f1, f2)
-        );
-
-        float3x3 G = math.mul(H, math.transpose(invDs));
-
-        float3 g0 = G.c0;
-        float3 g1 = G.c1;
-        float3 g2 = G.c2;
-        float3 g3 = -(g0 + g1 + g2);
-
-        SolveScalarXPBD(v0, v1, v2, v3, C, g0, g1, g2, g3, volumeCompliance);
-    }
-
-    private void SolveDeviatoricConstraint(
-        int v0, int v1, int v2, int v3,
-        float deviatoricCompliance,
-        float3x3 invDs
-    )
-    {
-        float3x3 X = new float3x3(
-            particles[v0].currentPosition - particles[v3].currentPosition,
-            particles[v1].currentPosition - particles[v3].currentPosition,
-            particles[v2].currentPosition - particles[v3].currentPosition
-        );
-        float3x3 F = math.mul(X, invDs);
-
-        float3 f1 = F.c0;
-        float3 f2 = F.c1;
-        float3 f3 = F.c2;
-
-        float r = math.sqrt(
-            math.lengthsq(f1) +
-            math.lengthsq(f2) +
-            math.lengthsq(f3));
-        r = math.max(r, 1e-8f);
-
-        float C = r - math.sqrt(3f);
-
-        float3x3 H = new float3x3(
-            f1 / r,
-            f2 / r,
-            f3 / r
-        );
-
-        float3x3 G = math.mul(H, math.transpose(invDs));
-
-        float3 g0 = G.c0;
-        float3 g1 = G.c1;
-        float3 g2 = G.c2;
-        float3 g3 = -(g0 + g1 + g2);
-
-        SolveScalarXPBD(v0, v1, v2, v3, C, g0, g1, g2, g3, deviatoricCompliance);
-    }
-#endregion
-
-#region Strain-Based
-    private void SolveTetStrainVolume(
-        int v0, int v1, int v2, int v3,
-        float3 initialX0,
-        float3 initialX1,
-        float3 initialX2,
-        float3 initialX3,
-        float deviatoricCompliance,
-        float volumeCompliance
-    )
-    {
-        float3x3 Dm = new float3x3(
-            initialX1 - initialX0,
-            initialX2 - initialX0,
-            initialX3 - initialX0
-        );
-
-        float detDm = math.determinant(Dm);
-        if (math.abs(detDm) < 1e-9f)
-            return;
-
-        float3x3 invDm = math.inverse(Dm);
-
-        float3x3 Ds = new float3x3(
-            particles[v1].currentPosition - particles[v0].currentPosition,
-            particles[v2].currentPosition - particles[v0].currentPosition,
-            particles[v3].currentPosition - particles[v0].currentPosition
-        );
-        float3x3 F = math.mul(Ds, invDm);
-
-        SolveStretchConstraint(v0, v1, v2, v3, invDm, F, 0, deviatoricCompliance);
-        SolveStretchConstraint(v0, v1, v2, v3, invDm, F, 1, deviatoricCompliance);
-        SolveStretchConstraint(v0, v1, v2, v3, invDm, F, 2, deviatoricCompliance);
-
-        Ds = new float3x3(
-            particles[v1].currentPosition - particles[v0].currentPosition,
-            particles[v2].currentPosition - particles[v0].currentPosition,
-            particles[v3].currentPosition - particles[v0].currentPosition
-        );
-        F = math.mul(Ds, invDm);
-
-        SolveShearConstraint(v0, v1, v2, v3, invDm, F, 0, 1, deviatoricCompliance * 2f);
-        SolveShearConstraint(v0, v1, v2, v3, invDm, F, 0, 2, deviatoricCompliance * 2f);
-        SolveShearConstraint(v0, v1, v2, v3, invDm, F, 1, 2, deviatoricCompliance * 2f);
-
-        Ds = new float3x3(
-            particles[v1].currentPosition - particles[v0].currentPosition,
-            particles[v2].currentPosition - particles[v0].currentPosition,
-            particles[v3].currentPosition - particles[v0].currentPosition
-        );
-        F = math.mul(Ds, invDm);
-
-        SolveVolumeConstraintFromF(v0, v1, v2, v3, invDm, F, volumeCompliance);
-    }
-
-    private void SolveStretchConstraint(
-        int v0, int v1, int v2, int v3,
-        float3x3 invDm,
-        float3x3 F,
-        int columnIndex,
-        float compliance
-    )
-    {
-        float3 f = columnIndex == 0 ? F.c0 : columnIndex == 1 ? F.c1 : F.c2;
-        float len = math.length(f);
-        if (len < 1e-8f)
-            return;
-
-        float C = len - 1f;
-
-        float3 q = columnIndex == 0 ? invDm.c0 : columnIndex == 1 ? invDm.c1 : invDm.c2;
-
-        float3 g1 = q.x * (f / len);
-        float3 g2 = q.y * (f / len);
-        float3 g3 = q.z * (f / len);
-        float3 g0 = -(g1 + g2 + g3);
-
-        SolveScalarXPBD(v0, v1, v2, v3, C, g0, g1, g2, g3, compliance);
-    }
-
-    private void SolveShearConstraint(
-        int v0, int v1, int v2, int v3,
-        float3x3 invDm,
-        float3x3 F,
-        int i,
-        int j,
-        float compliance
-    )
-    {
-        float3 fi = i == 0 ? F.c0 : (i == 1 ? F.c1 : F.c2);
-        float3 fj = j == 0 ? F.c0 : (j == 1 ? F.c1 : F.c2);
-
-        float C = math.dot(fi, fj);
-
-        float3 qi = i == 0 ? invDm.c0 : (i == 1 ? invDm.c1 : invDm.c2);
-        float3 qj = j == 0 ? invDm.c0 : (j == 1 ? invDm.c1 : invDm.c2);
-
-        float3 g1 = qi.x * fj + qj.x * fi;
-        float3 g2 = qi.y * fj + qj.y * fi;
-        float3 g3 = qi.z * fj + qj.z * fi;
-        float3 g0 = -(g1 + g2 + g3);
-
-        SolveScalarXPBD(v0, v1, v2, v3, C, g0, g1, g2, g3, compliance);
-    }
-
-    private void SolveVolumeConstraintFromF(
-        int v0, int v1, int v2, int v3,
-        float3x3 invDm,
-        float3x3 F,
-        float compliance
-    )
-    {
-        float J = math.determinant(F);
-        float C = J - 1f;
-
-        float3 cof0 = math.cross(F.c1, F.c2);
-        float3 cof1 = math.cross(F.c2, F.c0);
-        float3 cof2 = math.cross(F.c0, F.c1);
-
-        float3 c0 = invDm.c0;
-        float3 c1 = invDm.c1;
-        float3 c2 = invDm.c2;
-
-        float3 g1 = c0.x * cof0 + c1.x * cof1 + c2.x * cof2;
-        float3 g2 = c0.y * cof0 + c1.y * cof1 + c2.y * cof2;
-        float3 g3 = c0.z * cof0 + c1.z * cof1 + c2.z * cof2;
-        float3 g0 = -(g1 + g2 + g3);
-
-        SolveScalarXPBD(v0, v1, v2, v3, C, g0, g1, g2, g3, compliance);
-    }
-
-    private void SolveTetVolumeDirect(
-        int v0, int v1, int v2, int v3,
-        float restVolume,
-        float compliance
-    )
-    {
         float3 x0 = particles[v0].currentPosition;
         float3 x1 = particles[v1].currentPosition;
         float3 x2 = particles[v2].currentPosition;
         float3 x3 = particles[v3].currentPosition;
+        float3 x4 = particles[v4].currentPosition;
+        float3 x5 = particles[v5].currentPosition;
+        float3 x6 = particles[v6].currentPosition;
+        float3 x7 = particles[v7].currentPosition;
 
-        float3 e1 = x1 - x0;
-        float3 e2 = x2 - x0;
-        float3 e3 = x3 - x0;
+        float3 prevX0 = particles[v0].previousPosition;
+        float3 prevX1 = particles[v1].previousPosition;
+        float3 prevX2 = particles[v2].previousPosition;
+        float3 prevX3 = particles[v3].previousPosition;
+        float3 prevX4 = particles[v4].previousPosition;
+        float3 prevX5 = particles[v5].previousPosition;
+        float3 prevX6 = particles[v6].previousPosition;
+        float3 prevX7 = particles[v7].previousPosition;
 
-        float volume = math.dot(e1, math.cross(e2, e3)) / 6f;
-        float C = volume - restVolume;
+        float wX0 = particles[v0].invMass;
+        float wX1 = particles[v1].invMass;
+        float wX2 = particles[v2].invMass;
+        float wX3 = particles[v3].invMass;
+        float wX4 = particles[v4].invMass;
+        float wX5 = particles[v5].invMass;
+        float wX6 = particles[v6].invMass;
+        float wX7 = particles[v7].invMass;
 
-        float3 g1 = math.cross(e2, e3) / 6f;
-        float3 g2 = math.cross(e3, e1) / 6f;
-        float3 g3 = math.cross(e1, e2) / 6f;
-        float3 g0 = -(g1 + g2 + g3);
+        float dt2 = dt*dt;
+        float alphaStretch = bodyDeviConsCompliance[latticeCellBodyRef[index]] / dt2;
+        float alphaShear = bodyDeviConsCompliance[latticeCellBodyRef[index]] *2f / dt2;
+        float alphaVolume = bodyVolConsCompliance[latticeCellBodyRef[index]] / dt2;
 
-        SolveScalarXPBD(v0, v1, v2, v3, C, g0, g1, g2, g3, compliance);
+        SolveTetStrainVolume(
+            q0, q3, q6, q5,
+            ref x0, ref x3, ref x6, ref x5,
+            prevX0, prevX3, prevX6, prevX5,
+               wX0,    wX3,    wX6,    wX5,
+            alphaStretch,
+            alphaShear,
+            alphaVolume
+        );
+
+        SolveTetStrainVolume(
+            q0, q5, q6, q4,
+            ref x0, ref x5, ref x6, ref x4,
+            prevX0, prevX5, prevX6, prevX4,
+               wX0,    wX5,    wX6,    wX4,
+            alphaStretch,
+            alphaShear,
+            alphaVolume
+        );
+
+        SolveTetStrainVolume(
+            q0, q6, q3, q2,
+            ref x0, ref x6, ref x3, ref x2,
+            prevX0, prevX6, prevX3, prevX2,
+               wX0,    wX6,    wX3,    wX2,
+            alphaStretch,
+            alphaShear,
+            alphaVolume
+        );
+
+        SolveTetStrainVolume(
+            q5, q3, q6, q7,
+            ref x5, ref x3, ref x6, ref x7,
+            prevX5, prevX3, prevX6, prevX7,
+               wX5,    wX3,    wX6,    wX7,
+            alphaStretch,
+            alphaShear,
+            alphaVolume
+        );
+
+        SolveTetStrainVolume(
+            q0, q3, q5, q1,
+            ref x0, ref x3, ref x5, ref x1,
+            prevX0, prevX3, prevX5, prevX1,
+               wX0,    wX3,    wX5,    wX1,
+            alphaStretch,
+            alphaShear,
+            alphaVolume
+        );
+
+        Particle p;
+        p = particles[v0];
+        p.currentPosition = x0;
+        particles[v0] = p;
+        p = particles[v1];
+        p.currentPosition = x1;
+        particles[v1] = p;
+        p = particles[v2];
+        p.currentPosition = x2;
+        particles[v2] = p;
+        p = particles[v3];
+        p.currentPosition = x3;
+        particles[v3] = p;
+        p = particles[v4];
+        p.currentPosition = x4;
+        particles[v4] = p;
+        p = particles[v5];
+        p.currentPosition = x5;
+        particles[v5] = p;
+        p = particles[v6];
+        p.currentPosition = x6;
+        particles[v6] = p;
+        p = particles[v7];
+        p.currentPosition = x7;
+        particles[v7] = p;
+    }
+
+#region Basic Shape Matching
+    private void SolveShapeMatching(int index)
+    {
+        LatticeCell cell = latticeCells[index];
+        int v0 = cell.v0; int v1 = cell.v1; int v2 = cell.v2; int v3 = cell.v3;
+        int v4 = cell.v4; int v5 = cell.v5; int v6 = cell.v6; int v7 = cell.v7;
+        float3 q0 = new float3(-halfD, -halfD, -halfD);
+        float3 q1 = new float3( halfD, -halfD, -halfD);
+        float3 q2 = new float3(-halfD,  halfD, -halfD);
+        float3 q3 = new float3( halfD,  halfD, -halfD);
+        float3 q4 = new float3(-halfD, -halfD,  halfD);
+        float3 q5 = new float3( halfD, -halfD,  halfD);
+        float3 q6 = new float3(-halfD,  halfD,  halfD);
+        float3 q7 = new float3( halfD,  halfD,  halfD);
+
+        float3 x0 = particles[v0].currentPosition;
+        float3 x1 = particles[v1].currentPosition;
+        float3 x2 = particles[v2].currentPosition;
+        float3 x3 = particles[v3].currentPosition;
+        float3 x4 = particles[v4].currentPosition;
+        float3 x5 = particles[v5].currentPosition;
+        float3 x6 = particles[v6].currentPosition;
+        float3 x7 = particles[v7].currentPosition;
+
+        // 1. Current COM
+        float3 currentCOM = (x0 + x1 + x2 + x3 + x4 + x5 + x6 + x7) * 0.125f;
+
+        // 2. Build A_pq = sum p_i * q_i^T and A_qq = sum q_i * q_i^T
+        float3x3 Apq = ShapeMatchingMath.Zero3x3();
+        Apq += ShapeMatchingMath.OuterProduct(x0 - currentCOM, q0);
+        Apq += ShapeMatchingMath.OuterProduct(x1 - currentCOM, q1);
+        Apq += ShapeMatchingMath.OuterProduct(x2 - currentCOM, q2);
+        Apq += ShapeMatchingMath.OuterProduct(x3 - currentCOM, q3);
+        Apq += ShapeMatchingMath.OuterProduct(x4 - currentCOM, q4);
+        Apq += ShapeMatchingMath.OuterProduct(x5 - currentCOM, q5);
+        Apq += ShapeMatchingMath.OuterProduct(x6 - currentCOM, q6);
+        Apq += ShapeMatchingMath.OuterProduct(x7 - currentCOM, q7);
+
+        float3x3 Aqq = ShapeMatchingMath.Zero3x3();
+        Aqq += ShapeMatchingMath.OuterProduct(q0, q0);
+        Aqq += ShapeMatchingMath.OuterProduct(q1, q1);
+        Aqq += ShapeMatchingMath.OuterProduct(q2, q2);
+        Aqq += ShapeMatchingMath.OuterProduct(q3, q3);
+        Aqq += ShapeMatchingMath.OuterProduct(q4, q4);
+        Aqq += ShapeMatchingMath.OuterProduct(q5, q5);
+        Aqq += ShapeMatchingMath.OuterProduct(q6, q6);
+        Aqq += ShapeMatchingMath.OuterProduct(q7, q7);
+
+        float detAqq = math.determinant(Aqq);
+        if (math.abs(detAqq) < 1e-9f)
+            return;
+
+        float3x3 AqqInverse = math.inverse(Aqq);
+
+
+        // 3. Extract target T from A
+        float3x3 A = math.mul(Apq, AqqInverse);
+        float3x3 R = ShapeMatchingMath.ExtractRotation(A);
+
+        int bodyRef = latticeCellBodyRef[index];
+        float compliance = 0f;
+        float3x3 T = compliance * A + (1f - compliance) * R;
+
+        // 4. Solve the constraint
+        float3 goalV0 = math.mul(T, new float3(-halfD, -halfD, -halfD)) + currentCOM;
+        float3 goalV1 = math.mul(T, new float3( halfD, -halfD, -halfD)) + currentCOM;
+        float3 goalV2 = math.mul(T, new float3(-halfD,  halfD, -halfD)) + currentCOM;
+        float3 goalV3 = math.mul(T, new float3( halfD,  halfD, -halfD)) + currentCOM;
+        float3 goalV4 = math.mul(T, new float3(-halfD, -halfD,  halfD)) + currentCOM;
+        float3 goalV5 = math.mul(T, new float3( halfD, -halfD,  halfD)) + currentCOM;
+        float3 goalV6 = math.mul(T, new float3(-halfD,  halfD,  halfD)) + currentCOM;
+        float3 goalV7 = math.mul(T, new float3( halfD,  halfD,  halfD)) + currentCOM;
+
+
+        SetParticlePos(v0, goalV0);
+        SetParticlePos(v1, goalV1);
+        SetParticlePos(v2, goalV2);
+        SetParticlePos(v3, goalV3);
+        SetParticlePos(v4, goalV4);
+        SetParticlePos(v5, goalV5);
+        SetParticlePos(v6, goalV6);
+        SetParticlePos(v7, goalV7);
     }
 #endregion
 
-    private void SolveScalarXPBD(
-        int v0, int v1, int v2, int v3,
-        float C,
-        float3 g0,
-        float3 g1,
-        float3 g2,
-        float3 g3,
-        float compliance
+#region Neo-Hookean
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SolveTetNeoHookean(
+        float3 q0, float3 q1, float3 q2, float3 q3,
+        ref float3 x0, ref float3 x1,
+        ref float3 x2, ref float3 x3,
+        float3 prevX0, float3 prevX1,
+        float3 prevX2, float3 prevX3,
+        float wX0, float wX1,
+        float wX2, float wX3,
+        float alphaStretch,
+        float alphaShear,
+        float alphaVolume
     )
     {
-        float w0 = particles[v0].invMass;
-        float w1 = particles[v1].invMass;
-        float w2 = particles[v2].invMass;
-        float w3 = particles[v3].invMass;
+        // alphaShear has no separate use in isotropic Neo-Hookean material.
+        // Kept only because this function intentionally preserves your existing API.
 
-        float gradTerm =
+        float3x3 Dm = new float3x3(
+            q1 - q0,
+            q2 - q0,
+            q3 - q0
+        );
+        float detDm = math.determinant(Dm);
+        if (math.abs(detDm) < 1e-9f)
+            return;
+        float3x3 invDm = math.inverse(Dm);
+
+        float3 d0 = invDm.c0;
+        float3 d1 = invDm.c1;
+        float3 d2 = invDm.c2;
+
+        float restJ;
+        // Both constraints hard: mu/lambda is not encoded by compliance
+        // because both are exactly zero. Use a limiting incompressible value.
+        if (alphaStretch <= 0f)
+        {
+            restJ = 1f;
+        }
+        else
+        {
+            // gamma = 1 + mu/lambda.
+            // Because alphaD = 1/(mu*V), alphaH = 1/(lambda*V):
+            // mu/lambda = alphaH/alphaD.
+            restJ = 1f + alphaVolume / alphaStretch;
+        }
+
+        // This is exactly your existing damping algebra, but precomputed once
+        // for each of the two Neo-Hookean constraints.
+        float gammaDampingDev = alphaStretch * damping * dt;
+        float gammaDampingVol = alphaVolume * damping * dt;
+
+        // ----- Deviatoric constraint -----
+        // F is evaluated before the distortional solve.
+        float3x3 Ds = new float3x3(
+            x1 - x0,
+            x2 - x0,
+            x3 - x0
+        );
+        float3x3 F = math.mul(Ds, invDm);
+
+        SolveNeoHookeanDeviatoric(
+            ref x0, ref x1, ref x2, ref x3,
+            prevX0, prevX1, prevX2, prevX3,
+            wX0, wX1, wX2, wX3,
+            F.c0, F.c1, F.c2,
+            d0, d1, d2,
+            alphaStretch,
+            gammaDampingDev
+        );
+
+        // ----- Hydrostatic constraint -----
+        // Rebuild F after the first projection, as you do in your strain solver.
+        Ds = new float3x3(
+            x1 - x0,
+            x2 - x0,
+            x3 - x0
+        );
+        F = math.mul(Ds, invDm);
+
+        SolveNeoHookeanHydrostatic(
+            ref x0, ref x1, ref x2, ref x3,
+            prevX0, prevX1, prevX2, prevX3,
+            wX0, wX1, wX2, wX3,
+            F.c0, F.c1, F.c2,
+            d0, d1, d2,
+            restJ,
+            alphaVolume,
+            gammaDampingVol
+        );
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SolveNeoHookeanDeviatoric(
+        ref float3 x0, ref float3 x1,
+        ref float3 x2, ref float3 x3,
+        float3 prevX0, float3 prevX1,
+        float3 prevX2, float3 prevX3,
+        float w0, float w1, float w2, float w3,
+        float3 f0, float3 f1, float3 f2,
+        float3 d0, float3 d1, float3 d2,
+        float alpha,
+        float dampingGamma
+    )
+    {
+        float normF2 =
+            math.lengthsq(f0) +
+            math.lengthsq(f1) +
+            math.lengthsq(f2);
+
+        if (normF2 < 1e-16f)
+            return;
+
+        float normF = math.sqrt(normF2);
+        float invNormF = 1f / normF;
+
+        float C = normF - math.sqrt(3);
+
+        float3 p0 = f0 * invNormF;
+        float3 p1 = f1 * invNormF;
+        float3 p2 = f2 * invNormF;
+
+        // Gradient of C with respect to x1, x2, x3.
+        // F = Ds * invDm, so each gradient uses ROWS of invDm:
+        // d0.x, d1.x, d2.x for x1, etc.
+        float3 g1 = d0.x * p0 + d1.x * p1 + d2.x * p2;
+        float3 g2 = d0.y * p0 + d1.y * p1 + d2.y * p2;
+        float3 g3 = d0.z * p0 + d1.z * p1 + d2.z * p2;
+        float3 g0 = -(g1 + g2 + g3);
+
+        SolveScalarNeoHookeanXPBD(
+            ref x0, ref x1, ref x2, ref x3,
+            prevX0, prevX1, prevX2, prevX3,
+            w0, w1, w2, w3,
+            C,
+            g0, g1, g2, g3,
+            alpha,
+            dampingGamma
+        );
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SolveNeoHookeanHydrostatic(
+        ref float3 x0, ref float3 x1,
+        ref float3 x2, ref float3 x3,
+        float3 prevX0, float3 prevX1,
+        float3 prevX2, float3 prevX3,
+        float w0, float w1, float w2, float w3,
+        float3 f0, float3 f1, float3 f2,
+        float3 d0, float3 d1, float3 d2,
+        float restJ,
+        float alpha,
+        float dampingGamma
+    )
+    {
+        // Cofactors are needed both for J and the gradient.
+        float3 cof0 = math.cross(f1, f2);
+        float3 cof1 = math.cross(f2, f0);
+        float3 cof2 = math.cross(f0, f1);
+
+        // det(F) = f0 dot cross(f1, f2).
+        // Avoids an additional math.determinant(F) call.
+        float J = math.dot(f0, cof0);
+
+        float C = J - restJ;
+
+        float3 g1 =
+            d0.x * cof0 +
+            d1.x * cof1 +
+            d2.x * cof2;
+
+        float3 g2 =
+            d0.y * cof0 +
+            d1.y * cof1 +
+            d2.y * cof2;
+
+        float3 g3 =
+            d0.z * cof0 +
+            d1.z * cof1 +
+            d2.z * cof2;
+
+        float3 g0 = -(g1 + g2 + g3);
+
+        SolveScalarNeoHookeanXPBD(
+            ref x0, ref x1, ref x2, ref x3,
+            prevX0, prevX1, prevX2, prevX3,
+            w0, w1, w2, w3,
+            C,
+            g0, g1, g2, g3,
+            alpha,
+            dampingGamma
+        );
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SolveScalarNeoHookeanXPBD(
+        ref float3 x0, ref float3 x1,
+        ref float3 x2, ref float3 x3,
+        float3 prevX0, float3 prevX1,
+        float3 prevX2, float3 prevX3,
+        float w0, float w1, float w2, float w3,
+        float C,
+        float3 g0, float3 g1,
+        float3 g2, float3 g3,
+        float alpha,
+        float dampingGamma
+    )
+    {
+        float denom =
             w0 * math.lengthsq(g0) +
             w1 * math.lengthsq(g1) +
             w2 * math.lengthsq(g2) +
-            w3 * math.lengthsq(g3);
-
-        float alpha = compliance / (dt * dt);
-
-        if (gradTerm + alpha < 1e-8f)
+            w3 * math.lengthsq(g3) +
+            alpha;
+        if (denom < 1e-8f)
             return;
 
-        float denom = gradTerm + alpha;
         float dampingTerm = 0f;
+        if (dampingGamma > 0f)
+        {
+            float velocitySum =
+                math.dot(g0, x0 - prevX0) +
+                math.dot(g1, x1 - prevX1) +
+                math.dot(g2, x2 - prevX2) +
+                math.dot(g3, x3 - prevX3);
 
+            dampingTerm = dampingGamma * velocitySum;
+            denom *= 1f + dampingGamma;
+        }
+
+        float deltaLambda = -(C + dampingTerm) / denom;
+
+        x0 += w0 * deltaLambda * g0;
+        x1 += w1 * deltaLambda * g1;
+        x2 += w2 * deltaLambda * g2;
+        x3 += w3 * deltaLambda * g3;
+    }
+#endregion
+
+#region Strain-Based
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SolveTetStrainVolume(
+        float3 q0, float3 q1, float3 q2, float3 q3,
+        ref float3 x0, ref float3 x1,
+        ref float3 x2, ref float3 x3,
+        float3 prevX0, float3 prevX1,
+        float3 prevX2, float3 prevX3,
+        float wX0, float wX1,
+        float wX2, float wX3,
+        float alphaStretch,
+        float alphaShear,
+        float alphaVolume
+    )
+    {
+        float3x3 Dm = new float3x3(
+            q1 - q0,
+            q2 - q0,
+            q3 - q0
+        );
+        float detDm = math.determinant(Dm);
+        if (math.abs(detDm) < 1e-9f)
+            return;
+        float3x3 invDm = math.inverse(Dm);
+
+        float3x3 Ds = new float3x3(
+            x1 - x0,
+            x2 - x0,
+            x3 - x0
+        );
+        float3x3 F = math.mul(Ds, invDm);
+
+        float3 f0 = F.c0;
+        float3 f1 = F.c1;
+        float3 f2 = F.c2;
+
+        float3 d0 = invDm.c0;
+        float3 d1 = invDm.c1;
+        float3 d2 = invDm.c2;
+
+        SolveStretch(
+            ref x0, ref x1, ref x2, ref x3,
+            prevX0, prevX1, prevX2, prevX3,
+            wX0, wX1, wX2, wX3,
+            f0, d0, alphaStretch
+        );
+        SolveStretch(
+            ref x0, ref x1, ref x2, ref x3,
+            prevX0, prevX1, prevX2, prevX3,
+            wX0, wX1, wX2, wX3,
+            f1, d1, alphaStretch
+        );
+        SolveStretch(
+            ref x0, ref x1, ref x2, ref x3,
+            prevX0, prevX1, prevX2, prevX3,
+            wX0, wX1, wX2, wX3,
+            f2, d2, alphaStretch
+        );
+
+        SolveShear(
+            ref x0, ref x1, ref x2, ref x3,
+            prevX0, prevX1, prevX2, prevX3,
+            wX0, wX1, wX2, wX3,
+            f0, f1, d0, d1, alphaShear
+        );
+        SolveShear(
+            ref x0, ref x1, ref x2, ref x3,
+            prevX0, prevX1, prevX2, prevX3,
+            wX0, wX1, wX2, wX3,
+            f0, f2, d0, d2, alphaShear
+        );
+        SolveShear(
+            ref x0, ref x1, ref x2, ref x3,
+            prevX0, prevX1, prevX2, prevX3,
+            wX0, wX1, wX2, wX3,
+            f1, f2, d1, d2, alphaShear
+        );
+
+        Ds = new float3x3(
+            x1 - x0,
+            x2 - x0,
+            x3 - x0
+        );
+        F = math.mul(Ds, invDm);
+
+        SolveVolume(
+            ref x0, ref x1, ref x2, ref x3,
+            prevX0, prevX1, prevX2, prevX3,
+            wX0, wX1, wX2, wX3,
+            F, d0, d1, d2,
+            alphaVolume
+        );
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SolveStretch(
+        ref float3 x0, ref float3 x1,
+        ref float3 x2, ref float3 x3,
+        float3 prevX0, float3 prevX1,
+        float3 prevX2, float3 prevX3,
+        float w0, float w1, float w2, float w3,
+        float3 f,
+        float3 d,
+        float alpha
+    )
+    {
+        float lenSq = math.lengthsq(f);
+        if (lenSq < 1e-16f)
+            return;
+
+        float len = math.sqrt(lenSq);
+        float invLen = 1f / len;
+
+        float C = len - 1f;
+        float3 n = f * invLen;
+
+        float3 g1 = d.x * n;
+        float3 g2 = d.y * n;
+        float3 g3 = d.z * n;
+        float3 g0 = -(g1 + g2 + g3);
+
+        SolveScalarXPBD(
+            ref x0, ref x1, ref x2, ref x3,
+            prevX0, prevX1, prevX2, prevX3,
+            w0, w1, w2, w3,
+            C, g0, g1, g2, g3, alpha
+        );
+    }
+
+    private void SolveShear(
+        ref float3 x0, ref float3 x1,
+        ref float3 x2, ref float3 x3,
+        float3 prevX0, float3 prevX1,
+        float3 prevX2, float3 prevX3,
+        float w0, float w1, float w2, float w3,
+        float3 fi,
+        float3 fj,
+        float3 di,
+        float3 dj,
+        float alpha
+    )
+    {
+        float C = math.dot(fi, fj);
+
+        float3 g1 = di.x * fj + dj.x * fi;
+        float3 g2 = di.y * fj + dj.y * fi;
+        float3 g3 = di.z * fj + dj.z * fi;
+        float3 g0 = -(g1 + g2 + g3);
+
+        SolveScalarXPBD(
+            ref x0, ref x1, ref x2, ref x3,
+            prevX0, prevX1, prevX2, prevX3,
+            w0, w1, w2, w3,
+            C, g0, g1, g2, g3, alpha
+        );
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SolveVolume(
+        ref float3 x0, ref float3 x1,
+        ref float3 x2, ref float3 x3,
+        float3 prevX0, float3 prevX1,
+        float3 prevX2, float3 prevX3,
+        float w0, float w1, float w2, float w3,
+        float3x3 F,
+        float3 d0,
+        float3 d1,
+        float3 d2,
+        float alpha
+    )
+    {
+        float3 cof0 = math.cross(F.c1, F.c2);
+        float3 cof1 = math.cross(F.c2, F.c0);
+        float3 cof2 = math.cross(F.c0, F.c1);
+
+        float C = math.dot(F.c0, cof0) - 1f;
+
+        float3 g1 = d0.x * cof0 + d1.x * cof1 + d2.x * cof2;
+        float3 g2 = d0.y * cof0 + d1.y * cof1 + d2.y * cof2;
+        float3 g3 = d0.z * cof0 + d1.z * cof1 + d2.z * cof2;
+        float3 g0 = -(g1 + g2 + g3);
+
+        SolveScalarXPBD(
+            ref x0, ref x1, ref x2, ref x3,
+            prevX0, prevX1, prevX2, prevX3,
+            w0, w1, w2, w3,
+            C, g0, g1, g2, g3, alpha
+        );
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SolveScalarXPBD(
+        ref float3 x0, ref float3 x1,
+        ref float3 x2, ref float3 x3,
+        float3 prevX0, float3 prevX1,
+        float3 prevX2, float3 prevX3,
+        float w0, float w1, float w2, float w3,
+        float C,
+        float3 g0, float3 g1,
+        float3 g2, float3 g3,
+        float alpha
+    )
+    {
+        float denom =
+            w0 * math.lengthsq(g0) +
+            w1 * math.lengthsq(g1) +
+            w2 * math.lengthsq(g2) +
+            w3 * math.lengthsq(g3) +
+            alpha;
+        if (denom < 1e-8f)
+            return;
+
+        float dampingTerm = 0f;
         if (damping > 0f)
         {
             float betaTilde = damping * dt * dt;
             float gamma = alpha * betaTilde / dt;
 
-            float3 vel1 = particles[v0].currentPosition - particles[v0].previousPosition;
-            float3 vel2 = particles[v1].currentPosition - particles[v1].previousPosition;
-            float3 vel3 = particles[v2].currentPosition - particles[v2].previousPosition;
-            float3 vel4 = particles[v3].currentPosition - particles[v3].previousPosition;
+
+            float3 vel1 = x0 - prevX0;
+            float3 vel2 = x1 - prevX1;
+            float3 vel3 = x2 - prevX2;
+            float3 vel4 = x3 - prevX3;
+
 
             float velocitySum =
-                math.dot(g0, vel1) +
-                math.dot(g1, vel2) +
-                math.dot(g2, vel3) +
-                math.dot(g3, vel4);
+            math.dot(g0, vel1) +
+            math.dot(g1, vel2) +
+            math.dot(g2, vel3) +
+            math.dot(g3, vel4);
+
 
             dampingTerm = gamma * velocitySum;
             denom *= 1f + gamma;
@@ -394,16 +707,97 @@ public struct ShapeMatchingJob : IJobParallelFor
 
         float deltaLambda = -(C + dampingTerm) / denom;
 
-        UpdateParticlePos(v0, w0 * deltaLambda * g0);
-        UpdateParticlePos(v1, w1 * deltaLambda * g1);
-        UpdateParticlePos(v2, w2 * deltaLambda * g2);
-        UpdateParticlePos(v3, w3 * deltaLambda * g3);
+        x0 += w0 * deltaLambda * g0;
+        x1 += w1 * deltaLambda * g1;
+        x2 += w2 * deltaLambda * g2;
+        x3 += w3 * deltaLambda * g3;
     }
+#endregion
 
+#region Helper Functions
     private void UpdateParticlePos(int particleIdx, float3 delta)
     {
         var p = particles[particleIdx];
         p.currentPosition += delta;
         particles[particleIdx] = p;
     }
+
+    private void SetParticlePos(int particleIdx, float3 goal)
+    {
+        var p = particles[particleIdx];
+        p.currentPosition = goal;
+        particles[particleIdx] = p;
+    }
 }
+
+public static class ShapeMatchingMath
+{
+    public static float3x3 ExtractRotation(float3x3 A, int iterations = 10)
+    {
+        float3x3 R = A;
+
+        for (int i = 0; i < iterations; i++)
+        {
+            float det = Determinant(R);
+            if (math.abs(det) < 1e-8f)
+            {
+                // Degenerate case: fall back to identity or previous valid rotation
+                return float3x3.identity;
+            }
+
+            float3x3 RInvT = math.transpose(math.inverse(R));
+            R = Mul(0.5f, Add(R, RInvT));
+        }
+
+        // Optional: enforce proper rotation (determinant > 0)
+        if (Determinant(R) < 0.0f)
+        {
+            // Flip one axis to avoid reflection
+            R.c2 = -R.c2;
+        }
+
+        return R;
+    }
+
+    public static float3x3 Add(float3x3 a, float3x3 b)
+    {
+        return new float3x3(
+            a.c0 + b.c0,
+            a.c1 + b.c1,
+            a.c2 + b.c2
+        );
+    }
+
+    public static float3x3 Mul(float s, float3x3 m)
+    {
+        return new float3x3(
+            m.c0 * s,
+            m.c1 * s,
+            m.c2 * s
+        );
+    }
+
+    public static float Determinant(float3x3 m)
+    {
+        return math.dot(m.c0, math.cross(m.c1, m.c2));
+    }
+
+    public static float3x3 Zero3x3()
+    {
+        return new float3x3(
+            0f, 0f, 0f,
+            0f, 0f, 0f,
+            0f, 0f, 0f
+        );
+    }
+
+    public static float3x3 OuterProduct(float3 a, float3 b)
+    {
+        return new float3x3(
+            a * b.x,
+            a * b.y,
+            a * b.z
+        );
+    }
+}
+#endregion
