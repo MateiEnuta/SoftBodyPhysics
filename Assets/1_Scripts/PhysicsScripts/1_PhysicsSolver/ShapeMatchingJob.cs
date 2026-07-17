@@ -68,7 +68,7 @@ public struct ShapeMatchingJob : IJobParallelFor
         float alphaShear = bodyDeviConsCompliance[latticeCellBodyRef[index]] *2f / dt2;
         float alphaVolume = bodyVolConsCompliance[latticeCellBodyRef[index]] / dt2;
 
-        SolveTetStrainVolume(
+        SolveTetNeoHookean(
             q0, q3, q6, q5,
             ref x0, ref x3, ref x6, ref x5,
             prevX0, prevX3, prevX6, prevX5,
@@ -78,7 +78,7 @@ public struct ShapeMatchingJob : IJobParallelFor
             alphaVolume
         );
 
-        SolveTetStrainVolume(
+        SolveTetNeoHookean(
             q0, q5, q6, q4,
             ref x0, ref x5, ref x6, ref x4,
             prevX0, prevX5, prevX6, prevX4,
@@ -88,7 +88,7 @@ public struct ShapeMatchingJob : IJobParallelFor
             alphaVolume
         );
 
-        SolveTetStrainVolume(
+        SolveTetNeoHookean(
             q0, q6, q3, q2,
             ref x0, ref x6, ref x3, ref x2,
             prevX0, prevX6, prevX3, prevX2,
@@ -98,7 +98,7 @@ public struct ShapeMatchingJob : IJobParallelFor
             alphaVolume
         );
 
-        SolveTetStrainVolume(
+        SolveTetNeoHookean(
             q5, q3, q6, q7,
             ref x5, ref x3, ref x6, ref x7,
             prevX5, prevX3, prevX6, prevX7,
@@ -108,7 +108,7 @@ public struct ShapeMatchingJob : IJobParallelFor
             alphaVolume
         );
 
-        SolveTetStrainVolume(
+        SolveTetNeoHookean(
             q0, q3, q5, q1,
             ref x0, ref x3, ref x5, ref x1,
             prevX0, prevX3, prevX5, prevX1,
@@ -245,9 +245,6 @@ public struct ShapeMatchingJob : IJobParallelFor
         float alphaVolume
     )
     {
-        // alphaShear has no separate use in isotropic Neo-Hookean material.
-        // Kept only because this function intentionally preserves your existing API.
-
         float3x3 Dm = new float3x3(
             q1 - q0,
             q2 - q0,
@@ -263,27 +260,15 @@ public struct ShapeMatchingJob : IJobParallelFor
         float3 d2 = invDm.c2;
 
         float restJ;
-        // Both constraints hard: mu/lambda is not encoded by compliance
-        // because both are exactly zero. Use a limiting incompressible value.
         if (alphaStretch <= 0f)
         {
             restJ = 1f;
         }
         else
         {
-            // gamma = 1 + mu/lambda.
-            // Because alphaD = 1/(mu*V), alphaH = 1/(lambda*V):
-            // mu/lambda = alphaH/alphaD.
             restJ = 1f + alphaVolume / alphaStretch;
         }
 
-        // This is exactly your existing damping algebra, but precomputed once
-        // for each of the two Neo-Hookean constraints.
-        float gammaDampingDev = alphaStretch * damping * dt;
-        float gammaDampingVol = alphaVolume * damping * dt;
-
-        // ----- Deviatoric constraint -----
-        // F is evaluated before the distortional solve.
         float3x3 Ds = new float3x3(
             x1 - x0,
             x2 - x0,
@@ -291,48 +276,112 @@ public struct ShapeMatchingJob : IJobParallelFor
         );
         float3x3 F = math.mul(Ds, invDm);
 
+        float3 gD0 = 0, gD1 = 0, gD2 = 0, gD3 = 0;
+        float3 gH0 = 0, gH1 = 0, gH2 = 0, gH3 = 0;
+        float cD = 0f;
+        float cH = 0f;
+
         SolveNeoHookeanDeviatoric(
-            ref x0, ref x1, ref x2, ref x3,
-            prevX0, prevX1, prevX2, prevX3,
-            wX0, wX1, wX2, wX3,
             F.c0, F.c1, F.c2,
             d0, d1, d2,
-            alphaStretch,
-            gammaDampingDev
+            ref cD,
+            ref gD0, ref gD1, ref gD2, ref gD3
         );
-
-        // ----- Hydrostatic constraint -----
-        // Rebuild F after the first projection, as you do in your strain solver.
-        Ds = new float3x3(
-            x1 - x0,
-            x2 - x0,
-            x3 - x0
-        );
-        F = math.mul(Ds, invDm);
 
         SolveNeoHookeanHydrostatic(
-            ref x0, ref x1, ref x2, ref x3,
-            prevX0, prevX1, prevX2, prevX3,
-            wX0, wX1, wX2, wX3,
             F.c0, F.c1, F.c2,
             d0, d1, d2,
             restJ,
-            alphaVolume,
-            gammaDampingVol
+            ref cH,
+            ref gH0, ref gH1, ref gH2, ref gH3
+        );
+
+        float gammaDampingDev = alphaStretch * damping * dt;
+        float gammaDampingVol = alphaVolume * damping * dt;
+
+        SolveNeoHookeanCoupled(
+            ref x0, ref x1, ref x2, ref x3,
+            prevX0, prevX1, prevX2, prevX3,
+            wX0, wX1, wX2, wX3,
+            gD0, gD1, gD2, gD3,
+            gH0, gH1, gH2, gH3,
+            cD, cH,
+            alphaStretch, alphaVolume,
+            gammaDampingDev, gammaDampingVol
         );
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void SolveNeoHookeanDeviatoric(
-        ref float3 x0, ref float3 x1,
-        ref float3 x2, ref float3 x3,
-        float3 prevX0, float3 prevX1,
-        float3 prevX2, float3 prevX3,
+    private void SolveNeoHookeanCoupled(
+        ref float3 x0, ref float3 x1, ref float3 x2, ref float3 x3,
+        float3 prevX0, float3 prevX1, float3 prevX2, float3 prevX3,
         float w0, float w1, float w2, float w3,
+        float3 gD0, float3 gD1, float3 gD2, float3 gD3,
+        float3 gH0, float3 gH1, float3 gH2, float3 gH3,
+        float cD, float cH,
+        float alphaD, float alphaH,
+        float gammaD, // = alphaD * damping * dt, precomputed like your old code
+        float gammaH  // = alphaH * damping * dt
+    )
+    {
+        float k11 =
+            w0 * math.lengthsq(gD0) + w1 * math.lengthsq(gD1) +
+            w2 * math.lengthsq(gD2) + w3 * math.lengthsq(gD3) + alphaD;
+
+        float k22 =
+            w0 * math.lengthsq(gH0) + w1 * math.lengthsq(gH1) +
+            w2 * math.lengthsq(gH2) + w3 * math.lengthsq(gH3) + alphaH;
+
+        float k12 =
+            w0 * math.dot(gD0, gH0) + w1 * math.dot(gD1, gH1) +
+            w2 * math.dot(gD2, gH2) + w3 * math.dot(gD3, gH3);
+
+        // Velocities, exactly as in your original damping code: no /dt division,
+        // the /dt is folded into gammaD/gammaH already (same convention you used).
+        float3 vel0 = x0 - prevX0;
+        float3 vel1 = x1 - prevX1;
+        float3 vel2 = x2 - prevX2;
+        float3 vel3 = x3 - prevX3;
+
+        float velD =
+            math.dot(gD0, vel0) + math.dot(gD1, vel1) +
+            math.dot(gD2, vel2) + math.dot(gD3, vel3);
+
+        float velH =
+            math.dot(gH0, vel0) + math.dot(gH1, vel1) +
+            math.dot(gH2, vel2) + math.dot(gH3, vel3);
+
+        // Same shape as your original: C + gamma * velocitySum in the numerator,
+        // (1 + gamma) scaling the stiffness in the denominator.
+        float rhsD = -(cD + gammaD * velD);
+        float rhsH = -(cH + gammaH * velH);
+
+        float k11d = k11 * (1f + gammaD);
+        float k22d = k22 * (1f + gammaH);
+        // k12 left unscaled: the coupling comes purely from shared gradients,
+        // damping is treated as an intrinsic per-constraint property.
+
+        float det = k11d * k22d - k12 * k12;
+        if (math.abs(det) < 1e-12f) return;
+
+        float dLambdaD = (rhsD * k22d - rhsH * k12) / det;
+        float dLambdaH = (rhsH * k11d - rhsD * k12) / det;
+
+        x0 += w0 * (dLambdaD * gD0 + dLambdaH * gH0);
+        x1 += w1 * (dLambdaD * gD1 + dLambdaH * gH1);
+        x2 += w2 * (dLambdaD * gD2 + dLambdaH * gH2);
+        x3 += w3 * (dLambdaD * gD3 + dLambdaH * gH3);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SolveNeoHookeanDeviatoric(
         float3 f0, float3 f1, float3 f2,
         float3 d0, float3 d1, float3 d2,
-        float alpha,
-        float dampingGamma
+        ref float C,
+        ref float3 g0,
+        ref float3 g1,
+        ref float3 g2,
+        ref float3 g3
     )
     {
         float normF2 =
@@ -346,126 +395,44 @@ public struct ShapeMatchingJob : IJobParallelFor
         float normF = math.sqrt(normF2);
         float invNormF = 1f / normF;
 
-        float C = normF - math.sqrt(3);
+        C = normF - math.sqrt(3f);
 
         float3 p0 = f0 * invNormF;
         float3 p1 = f1 * invNormF;
         float3 p2 = f2 * invNormF;
 
-        // Gradient of C with respect to x1, x2, x3.
-        // F = Ds * invDm, so each gradient uses ROWS of invDm:
-        // d0.x, d1.x, d2.x for x1, etc.
-        float3 g1 = d0.x * p0 + d1.x * p1 + d2.x * p2;
-        float3 g2 = d0.y * p0 + d1.y * p1 + d2.y * p2;
-        float3 g3 = d0.z * p0 + d1.z * p1 + d2.z * p2;
-        float3 g0 = -(g1 + g2 + g3);
-
-        SolveScalarNeoHookeanXPBD(
-            ref x0, ref x1, ref x2, ref x3,
-            prevX0, prevX1, prevX2, prevX3,
-            w0, w1, w2, w3,
-            C,
-            g0, g1, g2, g3,
-            alpha,
-            dampingGamma
-        );
+        // F = Ds * invDm, so gradients wrt x1, x2, x3 use ROWS of invDm.
+        g1 = d0.x * p0 + d1.x * p1 + d2.x * p2;
+        g2 = d0.y * p0 + d1.y * p1 + d2.y * p2;
+        g3 = d0.z * p0 + d1.z * p1 + d2.z * p2;
+        g0 = -(g1 + g2 + g3);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void SolveNeoHookeanHydrostatic(
-        ref float3 x0, ref float3 x1,
-        ref float3 x2, ref float3 x3,
-        float3 prevX0, float3 prevX1,
-        float3 prevX2, float3 prevX3,
-        float w0, float w1, float w2, float w3,
         float3 f0, float3 f1, float3 f2,
         float3 d0, float3 d1, float3 d2,
         float restJ,
-        float alpha,
-        float dampingGamma
+        ref float C,
+        ref float3 g0,
+        ref float3 g1,
+        ref float3 g2,
+        ref float3 g3
     )
     {
-        // Cofactors are needed both for J and the gradient.
         float3 cof0 = math.cross(f1, f2);
         float3 cof1 = math.cross(f2, f0);
         float3 cof2 = math.cross(f0, f1);
 
-        // det(F) = f0 dot cross(f1, f2).
-        // Avoids an additional math.determinant(F) call.
         float J = math.dot(f0, cof0);
 
-        float C = J - restJ;
+        // C = J - restJ;
+        C = J - 1f;
 
-        float3 g1 =
-            d0.x * cof0 +
-            d1.x * cof1 +
-            d2.x * cof2;
-
-        float3 g2 =
-            d0.y * cof0 +
-            d1.y * cof1 +
-            d2.y * cof2;
-
-        float3 g3 =
-            d0.z * cof0 +
-            d1.z * cof1 +
-            d2.z * cof2;
-
-        float3 g0 = -(g1 + g2 + g3);
-
-        SolveScalarNeoHookeanXPBD(
-            ref x0, ref x1, ref x2, ref x3,
-            prevX0, prevX1, prevX2, prevX3,
-            w0, w1, w2, w3,
-            C,
-            g0, g1, g2, g3,
-            alpha,
-            dampingGamma
-        );
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void SolveScalarNeoHookeanXPBD(
-        ref float3 x0, ref float3 x1,
-        ref float3 x2, ref float3 x3,
-        float3 prevX0, float3 prevX1,
-        float3 prevX2, float3 prevX3,
-        float w0, float w1, float w2, float w3,
-        float C,
-        float3 g0, float3 g1,
-        float3 g2, float3 g3,
-        float alpha,
-        float dampingGamma
-    )
-    {
-        float denom =
-            w0 * math.lengthsq(g0) +
-            w1 * math.lengthsq(g1) +
-            w2 * math.lengthsq(g2) +
-            w3 * math.lengthsq(g3) +
-            alpha;
-        if (denom < 1e-8f)
-            return;
-
-        float dampingTerm = 0f;
-        if (dampingGamma > 0f)
-        {
-            float velocitySum =
-                math.dot(g0, x0 - prevX0) +
-                math.dot(g1, x1 - prevX1) +
-                math.dot(g2, x2 - prevX2) +
-                math.dot(g3, x3 - prevX3);
-
-            dampingTerm = dampingGamma * velocitySum;
-            denom *= 1f + dampingGamma;
-        }
-
-        float deltaLambda = -(C + dampingTerm) / denom;
-
-        x0 += w0 * deltaLambda * g0;
-        x1 += w1 * deltaLambda * g1;
-        x2 += w2 * deltaLambda * g2;
-        x3 += w3 * deltaLambda * g3;
+        g1 = d0.x * cof0 + d1.x * cof1 + d2.x * cof2;
+        g2 = d0.y * cof0 + d1.y * cof1 + d2.y * cof2;
+        g3 = d0.z * cof0 + d1.z * cof1 + d2.z * cof2;
+        g0 = -(g1 + g2 + g3);
     }
 #endregion
 
