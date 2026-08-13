@@ -20,8 +20,8 @@ public class PhysicsSolver : MonoBehaviour
     private bool initialised = false;
 
     // --------------Lattice bodies data--------------
-    private NativeList<float>  bodyDeviConsCompliance;
-    private NativeList<float>  bodyVolConsCompliance;
+    private NativeList<float>  bodyMu;
+    private NativeList<float>  bodyLambda;
     private List<BodyWraper>   bodyWrapers;
 
     // --------------Particle data--------------
@@ -59,6 +59,10 @@ public class PhysicsSolver : MonoBehaviour
         int visualWraperCount = visualWrapers.Length;
         int collisionWraperCount = collisionWrapers.Length;
 
+        float cellVolume = targetLatticeDimensions * targetLatticeDimensions * targetLatticeDimensions;
+        float bigTetVol = cellVolume * (1f/3f);
+        float smallTetsVol = cellVolume * (1f/6f);
+
         for (int i = 0; i < substeps; i++)
         {
             ParticleUpdateJob particleUpdateJob = new ParticleUpdateJob
@@ -75,10 +79,11 @@ public class PhysicsSolver : MonoBehaviour
                 {
                     dt = dt, damping = damping, channelStart = channelStart,
                     halfD = targetLatticeDimensions * 0.5f,
+                    bigTetVol = bigTetVol, smallTetsVol = smallTetsVol,
                     latticeCells = latticeCells.AsArray(),
                     latticeCellBodyRef = latticeCellBodyRef.AsArray(),
-                    bodyDeviConsCompliance = bodyDeviConsCompliance.AsArray(),
-                    bodyVolConsCompliance = bodyVolConsCompliance.AsArray(),
+                    bodyMu = bodyMu.AsArray(),
+                    bodyLambda = bodyLambda.AsArray(),
                     particles = particles.AsArray()
                 };
                 handle = shapeMatchingJob.Schedule(globalChlCount[chl], 1, handle);
@@ -92,6 +97,21 @@ public class PhysicsSolver : MonoBehaviour
                 particles = particles.AsArray()
             };
             handle = basicPlaneColJob.Schedule(collisionWraperCount, 1, handle);
+
+            // channelStart = 0;
+            // for (int chl = 0; chl < 8; chl++)
+            // {
+            //     TetDampingJob tetDampingJob = new TetDampingJob
+            //     {
+            //         dt = dt,
+            //         damping = damping,
+            //         channelStart = channelStart,
+            //         latticeCells = latticeCells.AsArray(),
+            //         particles = particles.AsArray()
+            //     };
+            //     handle = tetDampingJob.Schedule(globalChlCount[chl], 1, handle);
+            //     channelStart += globalChlCount[chl];
+            // }
         }
 
         VisVertsUpdateJob visVertsUpdateJob = new VisVertsUpdateJob
@@ -256,8 +276,8 @@ public class PhysicsSolver : MonoBehaviour
 
         // Add the new body wraper and body data
         bodyWrapers.Add(bodyWraper);
-        bodyDeviConsCompliance.Add(latticeBody.deviatoricCompliance);
-        bodyVolConsCompliance.Add(latticeBody.volumeCompliance);
+        bodyMu.Add(latticeBody.mu);
+        bodyLambda.Add(latticeBody.lambda);
         
         latticeBody.transform.localScale = Vector3.one;
         numberOfCells = latticeCells.Length;
@@ -300,8 +320,8 @@ public class PhysicsSolver : MonoBehaviour
 
 
         // Body data
-        bodyDeviConsCompliance = new NativeList<float>(Allocator.Persistent);
-        bodyVolConsCompliance = new NativeList<float>(Allocator.Persistent);
+        bodyMu = new NativeList<float>(Allocator.Persistent);
+        bodyLambda = new NativeList<float>(Allocator.Persistent);
         bodyWrapers = new List<BodyWraper>();
 
         // Allocate all native lists
@@ -332,8 +352,8 @@ public class PhysicsSolver : MonoBehaviour
     private void DisposeLists()
     {
         // Dispose of all native lists
-        if (bodyDeviConsCompliance.IsCreated) bodyDeviConsCompliance.Dispose();
-        if (bodyVolConsCompliance.IsCreated) bodyVolConsCompliance.Dispose();
+        if (bodyMu.IsCreated) bodyMu.Dispose();
+        if (bodyLambda.IsCreated) bodyLambda.Dispose();
         if (particles.IsCreated) particles.Dispose();
         if (latticeCells.IsCreated) latticeCells.Dispose();
         if (latticeCellBodyRef.IsCreated) latticeCellBodyRef.Dispose();

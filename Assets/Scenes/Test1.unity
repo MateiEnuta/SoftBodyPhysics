@@ -152,8 +152,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!23 &46697602
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -260,8 +262,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &47471790
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -391,8 +395,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0.001
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &146282953
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -658,8 +664,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!23 &163570393
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -765,8 +773,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 1
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!23 &182178859
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -873,8 +883,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &301790349
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -1004,8 +1016,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &349734547
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -1135,8 +1149,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0.001
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &379602892
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -1265,8 +1281,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0.001
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!23 &456054391
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -1373,8 +1391,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0.001
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &460038597
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -1504,8 +1524,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 150
-  volumeCompliance: 0.67
+  youngsModulus: 67
+  poissonRatio: 0.48
+  mu: 0
+  lambda: 0
 --- !u!135 &475272091
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -1664,8 +1686,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!135 &491652150
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -1793,8 +1817,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0.001
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &572877406
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -1922,9 +1948,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
-  mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  mass: 500
+  youngsModulus: 1000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!23 &581364456
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -2030,9 +2058,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
-  mass: 1
-  deviatoricCompliance: 150
-  volumeCompliance: 0.67
+  mass: 1000
+  youngsModulus: 10000
+  poissonRatio: 0.45
+  mu: 0
+  lambda: 0
 --- !u!135 &655695264
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -2160,8 +2190,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 150
-  volumeCompliance: 0.67
+  youngsModulus: 67
+  poissonRatio: 0.48
+  mu: 0
+  lambda: 0
 --- !u!135 &809660619
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -2289,8 +2321,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &834999923
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -2420,8 +2454,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 150
-  volumeCompliance: 0.67
+  youngsModulus: 67
+  poissonRatio: 0.48
+  mu: 0
+  lambda: 0
 --- !u!135 &866091570
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -2548,8 +2584,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!23 &944588345
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -2656,8 +2694,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 150
-  volumeCompliance: 0.67
+  youngsModulus: 67
+  poissonRatio: 0.48
+  mu: 0
+  lambda: 0
 --- !u!135 &950238808
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -2785,8 +2825,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &951898230
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -2916,8 +2958,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 150
-  volumeCompliance: 0.67
+  youngsModulus: 67
+  poissonRatio: 0.48
+  mu: 0
+  lambda: 0
 --- !u!135 &1036851458
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -3044,8 +3088,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!23 &1042016340
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -3152,8 +3198,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!135 &1044154375
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -3280,9 +3328,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
-  mass: 200
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  mass: 1
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!135 &1056629141
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -3410,8 +3460,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &1159473636
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -3541,8 +3593,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &1289932202
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -3672,8 +3726,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 150
-  volumeCompliance: 0.67
+  youngsModulus: 67
+  poissonRatio: 0.48
+  mu: 0
+  lambda: 0
 --- !u!135 &1290330766
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -3801,8 +3857,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &1316266575
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -3931,8 +3989,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!23 &1337180227
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -4070,8 +4130,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0.001
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &1429577023
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -4201,8 +4263,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &1485976999
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -4332,8 +4396,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &1526777974
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -4462,9 +4528,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
-  mass: 1
-  deviatoricCompliance: 0.00001
-  volumeCompliance: 0
+  mass: 10000
+  youngsModulus: 1e+15
+  poissonRatio: 0.45
+  mu: 0
+  lambda: 0
 --- !u!136 &1621177321
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -4594,8 +4662,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &1621271982
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -4726,7 +4796,7 @@ MonoBehaviour:
     x: 0
     y: -10
     z: 0
-  damping: 0.0000001
+  damping: 0
   debugLatticeCells: 0
   debugColMesh: 0
   debugVisVerts: 0
@@ -4811,8 +4881,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 150
-  volumeCompliance: 0.67
+  youngsModulus: 67
+  poissonRatio: 0.48
+  mu: 0
+  lambda: 0
 --- !u!135 &1660313647
 SphereCollider:
   m_ObjectHideFlags: 0
@@ -4940,8 +5012,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0.001
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &1678156388
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -5070,8 +5144,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!23 &1681729650
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -5177,8 +5253,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!23 &1693886792
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -5412,8 +5490,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &1826352230
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -5543,8 +5623,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0.001
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!136 &1846875964
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -5673,8 +5755,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!23 &2005714166
 MeshRenderer:
   m_ObjectHideFlags: 0
@@ -5781,8 +5865,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::LatticeBody
   collisionMesh: {fileID: 0}
   mass: 1
-  deviatoricCompliance: 0
-  volumeCompliance: 0
+  youngsModulus: 10000000
+  poissonRatio: 0.4
+  mu: 0
+  lambda: 0
 --- !u!135 &2025667195
 SphereCollider:
   m_ObjectHideFlags: 0

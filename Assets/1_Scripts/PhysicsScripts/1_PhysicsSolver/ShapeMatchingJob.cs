@@ -11,11 +11,11 @@ public struct ShapeMatchingJob : IJobParallelFor
     [ReadOnly] public float dt;
     [ReadOnly] public float damping;
     [ReadOnly] public int channelStart;
-    [ReadOnly] public float halfD;
+    [ReadOnly] public float halfD, bigTetVol, smallTetsVol;
     [ReadOnly] public NativeArray<LatticeCell> latticeCells;
     [ReadOnly] public NativeArray<int>         latticeCellBodyRef;
-    [ReadOnly] public NativeArray<float>       bodyDeviConsCompliance;
-    [ReadOnly] public NativeArray<float>       bodyVolConsCompliance;
+    [ReadOnly] public NativeArray<float>       bodyMu;
+    [ReadOnly] public NativeArray<float>       bodyLambda;
     [NativeDisableParallelForRestriction] public NativeArray<Particle> particles;
     
     public void Execute(int index)
@@ -26,7 +26,16 @@ public struct ShapeMatchingJob : IJobParallelFor
         LatticeCell cell = latticeCells[index];
         int v0 = cell.v0; int v1 = cell.v1; int v2 = cell.v2; int v3 = cell.v3;
         int v4 = cell.v4; int v5 = cell.v5; int v6 = cell.v6; int v7 = cell.v7;
-        
+
+        Particle p0 = particles[v0];
+        Particle p1 = particles[v1];
+        Particle p2 = particles[v2];
+        Particle p3 = particles[v3];
+        Particle p4 = particles[v4];
+        Particle p5 = particles[v5];
+        Particle p6 = particles[v6];
+        Particle p7 = particles[v7];
+
         float3 q0 = new float3(-halfD, -halfD, -halfD);
         float3 q1 = new float3( halfD, -halfD, -halfD);
         float3 q2 = new float3(-halfD,  halfD, -halfD);
@@ -36,113 +45,58 @@ public struct ShapeMatchingJob : IJobParallelFor
         float3 q6 = new float3(-halfD,  halfD,  halfD);
         float3 q7 = new float3( halfD,  halfD,  halfD);
 
-        float3 x0 = particles[v0].currentPosition;
-        float3 x1 = particles[v1].currentPosition;
-        float3 x2 = particles[v2].currentPosition;
-        float3 x3 = particles[v3].currentPosition;
-        float3 x4 = particles[v4].currentPosition;
-        float3 x5 = particles[v5].currentPosition;
-        float3 x6 = particles[v6].currentPosition;
-        float3 x7 = particles[v7].currentPosition;
-
-        float3 prevX0 = particles[v0].previousPosition;
-        float3 prevX1 = particles[v1].previousPosition;
-        float3 prevX2 = particles[v2].previousPosition;
-        float3 prevX3 = particles[v3].previousPosition;
-        float3 prevX4 = particles[v4].previousPosition;
-        float3 prevX5 = particles[v5].previousPosition;
-        float3 prevX6 = particles[v6].previousPosition;
-        float3 prevX7 = particles[v7].previousPosition;
-
-        float wX0 = particles[v0].invMass;
-        float wX1 = particles[v1].invMass;
-        float wX2 = particles[v2].invMass;
-        float wX3 = particles[v3].invMass;
-        float wX4 = particles[v4].invMass;
-        float wX5 = particles[v5].invMass;
-        float wX6 = particles[v6].invMass;
-        float wX7 = particles[v7].invMass;
-
         float dt2 = dt*dt;
-        float alphaStretch = bodyDeviConsCompliance[latticeCellBodyRef[index]] / dt2;
-        float alphaShear = bodyDeviConsCompliance[latticeCellBodyRef[index]] *2f / dt2;
-        float alphaVolume = bodyVolConsCompliance[latticeCellBodyRef[index]] / dt2;
+        float mu = bodyMu[latticeCellBodyRef[index]];
+        float lambda = bodyLambda[latticeCellBodyRef[index]];
+
+        float alphaStretchBigTet = 1f / (mu * bigTetVol) / dt2;
+        float alphaVolumeBigTet = 1f / (lambda * bigTetVol) / dt2;
+        float alphaStretchSmallTet = 1f / (mu * smallTetsVol) / dt2;
+        float alphaVolumeSmallTet = 1f / (lambda * smallTetsVol) / dt2;
 
         SolveTetNeoHookean(
             q0, q3, q6, q5,
-            ref x0, ref x3, ref x6, ref x5,
-            prevX0, prevX3, prevX6, prevX5,
-               wX0,    wX3,    wX6,    wX5,
-            alphaStretch,
-            alphaShear,
-            alphaVolume
+            ref p0, ref p3, ref p6, ref p5,
+            alphaStretchBigTet,
+            alphaVolumeBigTet
         );
 
         SolveTetNeoHookean(
             q0, q5, q6, q4,
-            ref x0, ref x5, ref x6, ref x4,
-            prevX0, prevX5, prevX6, prevX4,
-               wX0,    wX5,    wX6,    wX4,
-            alphaStretch,
-            alphaShear,
-            alphaVolume
+            ref p0, ref p5, ref p6, ref p4,
+            alphaStretchSmallTet,
+            alphaVolumeSmallTet
         );
 
         SolveTetNeoHookean(
             q0, q6, q3, q2,
-            ref x0, ref x6, ref x3, ref x2,
-            prevX0, prevX6, prevX3, prevX2,
-               wX0,    wX6,    wX3,    wX2,
-            alphaStretch,
-            alphaShear,
-            alphaVolume
+            ref p0, ref p6, ref p3, ref p2,
+            alphaStretchSmallTet,
+            alphaVolumeSmallTet
         );
 
         SolveTetNeoHookean(
             q5, q3, q6, q7,
-            ref x5, ref x3, ref x6, ref x7,
-            prevX5, prevX3, prevX6, prevX7,
-               wX5,    wX3,    wX6,    wX7,
-            alphaStretch,
-            alphaShear,
-            alphaVolume
+            ref p5, ref p3, ref p6, ref p7,
+            alphaStretchSmallTet,
+            alphaVolumeSmallTet
         );
 
         SolveTetNeoHookean(
             q0, q3, q5, q1,
-            ref x0, ref x3, ref x5, ref x1,
-            prevX0, prevX3, prevX5, prevX1,
-               wX0,    wX3,    wX5,    wX1,
-            alphaStretch,
-            alphaShear,
-            alphaVolume
+            ref p0, ref p3, ref p5, ref p1,
+            alphaStretchSmallTet,
+            alphaVolumeSmallTet
         );
 
-        Particle p;
-        p = particles[v0];
-        p.currentPosition = x0;
-        particles[v0] = p;
-        p = particles[v1];
-        p.currentPosition = x1;
-        particles[v1] = p;
-        p = particles[v2];
-        p.currentPosition = x2;
-        particles[v2] = p;
-        p = particles[v3];
-        p.currentPosition = x3;
-        particles[v3] = p;
-        p = particles[v4];
-        p.currentPosition = x4;
-        particles[v4] = p;
-        p = particles[v5];
-        p.currentPosition = x5;
-        particles[v5] = p;
-        p = particles[v6];
-        p.currentPosition = x6;
-        particles[v6] = p;
-        p = particles[v7];
-        p.currentPosition = x7;
-        particles[v7] = p;
+        particles[v0] = p0;
+        particles[v1] = p1;
+        particles[v2] = p2;
+        particles[v3] = p3;
+        particles[v4] = p4;
+        particles[v5] = p5;
+        particles[v6] = p6;
+        particles[v7] = p7;
     }
 
 #region Basic Shape Matching
@@ -234,14 +188,8 @@ public struct ShapeMatchingJob : IJobParallelFor
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private void SolveTetNeoHookean(
         float3 q0, float3 q1, float3 q2, float3 q3,
-        ref float3 x0, ref float3 x1,
-        ref float3 x2, ref float3 x3,
-        float3 prevX0, float3 prevX1,
-        float3 prevX2, float3 prevX3,
-        float wX0, float wX1,
-        float wX2, float wX3,
+        ref Particle p0, ref Particle p1, ref Particle p2, ref Particle p3,
         float alphaStretch,
-        float alphaShear,
         float alphaVolume
     )
     {
@@ -259,20 +207,10 @@ public struct ShapeMatchingJob : IJobParallelFor
         float3 d1 = invDm.c1;
         float3 d2 = invDm.c2;
 
-        float restJ;
-        if (alphaStretch <= 0f)
-        {
-            restJ = 1f;
-        }
-        else
-        {
-            restJ = 1f + alphaVolume / alphaStretch;
-        }
-
         float3x3 Ds = new float3x3(
-            x1 - x0,
-            x2 - x0,
-            x3 - x0
+            p1.currentPosition - p0.currentPosition,
+            p2.currentPosition - p0.currentPosition,
+            p3.currentPosition - p0.currentPosition
         );
         float3x3 F = math.mul(Ds, invDm);
 
@@ -291,23 +229,17 @@ public struct ShapeMatchingJob : IJobParallelFor
         SolveNeoHookeanHydrostatic(
             F.c0, F.c1, F.c2,
             d0, d1, d2,
-            restJ,
             ref cH,
             ref gH0, ref gH1, ref gH2, ref gH3
         );
 
-        float gammaDampingDev = alphaStretch * damping * dt;
-        float gammaDampingVol = alphaVolume * damping * dt;
-
         SolveNeoHookeanCoupled(
-            ref x0, ref x1, ref x2, ref x3,
-            prevX0, prevX1, prevX2, prevX3,
-            wX0, wX1, wX2, wX3,
+            ref p0, ref p1, ref p2, ref p3,
             gD0, gD1, gD2, gD3,
             gH0, gH1, gH2, gH3,
             cD, cH,
-            alphaStretch, alphaVolume,
-            gammaDampingDev, gammaDampingVol
+            alphaStretch, alphaVolume
+            // damping, dt
         );
     }
 
@@ -320,57 +252,118 @@ public struct ShapeMatchingJob : IJobParallelFor
         float3 gH0, float3 gH1, float3 gH2, float3 gH3,
         float cD, float cH,
         float alphaD, float alphaH,
-        float gammaD, // = alphaD * damping * dt, precomputed like your old code
-        float gammaH  // = alphaH * damping * dt
-    )
+        float rayleighDamping,
+        float h)
     {
         float k11 =
             w0 * math.lengthsq(gD0) + w1 * math.lengthsq(gD1) +
-            w2 * math.lengthsq(gD2) + w3 * math.lengthsq(gD3) + alphaD;
+            w2 * math.lengthsq(gD2) + w3 * math.lengthsq(gD3);
 
         float k22 =
             w0 * math.lengthsq(gH0) + w1 * math.lengthsq(gH1) +
-            w2 * math.lengthsq(gH2) + w3 * math.lengthsq(gH3) + alphaH;
+            w2 * math.lengthsq(gH2) + w3 * math.lengthsq(gH3);
 
         float k12 =
             w0 * math.dot(gD0, gH0) + w1 * math.dot(gD1, gH1) +
             w2 * math.dot(gD2, gH2) + w3 * math.dot(gD3, gH3);
 
-        // Velocities, exactly as in your original damping code: no /dt division,
-        // the /dt is folded into gammaD/gammaH already (same convention you used).
-        float3 vel0 = x0 - prevX0;
-        float3 vel1 = x1 - prevX1;
-        float3 vel2 = x2 - prevX2;
-        float3 vel3 = x3 - prevX3;
+        // Position differences are h * velocity.
+        float3 dx0 = x0 - prevX0;
+        float3 dx1 = x1 - prevX1;
+        float3 dx2 = x2 - prevX2;
+        float3 dx3 = x3 - prevX3;
 
-        float velD =
-            math.dot(gD0, vel0) + math.dot(gD1, vel1) +
-            math.dot(gD2, vel2) + math.dot(gD3, vel3);
+        float rateD =
+            math.dot(gD0, dx0) + math.dot(gD1, dx1) +
+            math.dot(gD2, dx2) + math.dot(gD3, dx3);
 
-        float velH =
-            math.dot(gH0, vel0) + math.dot(gH1, vel1) +
-            math.dot(gH2, vel2) + math.dot(gH3, vel3);
+        float rateH =
+            math.dot(gH0, dx0) + math.dot(gH1, dx1) +
+            math.dot(gH2, dx2) + math.dot(gH3, dx3);
 
-        // Same shape as your original: C + gamma * velocitySum in the numerator,
-        // (1 + gamma) scaling the stiffness in the denominator.
-        float rhsD = -(cD + gammaD * velD);
-        float rhsH = -(cH + gammaH * velH);
+        // Same scalar convention as your old XPBD damping:
+        // gamma = alphaTilde * damping * h.
+        //
+        // alphaD and alphaH must already be compliance / h².
+        float gammaD = alphaD * rayleighDamping * h;
+        float gammaH = alphaH * rayleighDamping * h;
 
-        float k11d = k11 * (1f + gammaD);
-        float k22d = k22 * (1f + gammaH);
-        // k12 left unscaled: the coupling comes purely from shared gradients,
-        // damping is treated as an intrinsic per-constraint property.
+        // Damping changes the full row, including k12.
+        float a11 = (1f + gammaD) * k11 + alphaD;
+        float a12 = (1f + gammaD) * k12;
 
-        float det = k11d * k22d - k12 * k12;
-        if (math.abs(det) < 1e-12f) return;
+        float a21 = (1f + gammaH) * k12;
+        float a22 = (1f + gammaH) * k22 + alphaH;
 
-        float dLambdaD = (rhsD * k22d - rhsH * k12) / det;
-        float dLambdaH = (rhsH * k11d - rhsD * k12) / det;
+        float det = a11 * a22 - a12 * a21;
+        if (!math.isfinite(det) || math.abs(det) < 1e-12f)
+            return;
+
+        float rhsD = -(cD + gammaD * rateD);
+        float rhsH = -(cH + gammaH * rateH);
+
+        float dLambdaD = (rhsD * a22 - a12 * rhsH) / det;
+        float dLambdaH = (a11 * rhsH - rhsD * a21) / det;
 
         x0 += w0 * (dLambdaD * gD0 + dLambdaH * gH0);
         x1 += w1 * (dLambdaD * gD1 + dLambdaH * gH1);
         x2 += w2 * (dLambdaD * gD2 + dLambdaH * gH2);
         x3 += w3 * (dLambdaD * gD3 + dLambdaH * gH3);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void SolveNeoHookeanCoupled(
+        ref Particle p0, ref Particle p1, ref Particle p2, ref Particle p3,
+        float3 gD0, float3 gD1, float3 gD2, float3 gD3,
+        float3 gH0, float3 gH1, float3 gH2, float3 gH3,
+        float cD, float cH,
+        float alphaD, float alphaH
+    )
+    {
+        // K = J * M^-1 * J^T + alpha.
+        //
+        // D = deviatoric constraint.
+        // H = hydrostatic / volume constraint.
+
+        float kDD =
+            p0.invMass * math.lengthsq(gD0) +
+            p1.invMass * math.lengthsq(gD1) +
+            p2.invMass * math.lengthsq(gD2) +
+            p3.invMass * math.lengthsq(gD3) +
+            alphaD;
+
+        float kHH =
+            p0.invMass * math.lengthsq(gH0) +
+            p1.invMass * math.lengthsq(gH1) +
+            p2.invMass * math.lengthsq(gH2) +
+            p3.invMass * math.lengthsq(gH3) +
+            alphaH;
+
+        // Constraint coupling because both constraints affect
+        // the same tetrahedron vertices.
+        float kDH =
+            p0.invMass * math.dot(gD0, gH0) +
+            p1.invMass * math.dot(gD1, gH1) +
+            p2.invMass * math.dot(gD2, gH2) +
+            p3.invMass * math.dot(gD3, gH3);
+
+        float determinant = kDD * kHH - kDH * kDH;
+
+        if (!math.isfinite(determinant) || math.abs(determinant) < 1e-12f)
+            return;
+
+        // Solve:
+        //
+        // [ kDD  kDH ] [ deltaLambdaD ] = [ -cD ]
+        // [ kDH  kHH ] [ deltaLambdaH ]   [ -cH ]
+        //
+        float deltaLambdaD = (-cD * kHH + cH * kDH) / determinant;
+        float deltaLambdaH = (-cH * kDD + cD * kDH) / determinant;
+
+        p0.currentPosition += p0.invMass * (deltaLambdaD * gD0 + deltaLambdaH * gH0);
+        p1.currentPosition += p1.invMass * (deltaLambdaD * gD1 + deltaLambdaH * gH1);
+        p2.currentPosition += p2.invMass * (deltaLambdaD * gD2 + deltaLambdaH * gH2);
+        p3.currentPosition += p3.invMass * (deltaLambdaD * gD3 + deltaLambdaH * gH3);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -412,7 +405,6 @@ public struct ShapeMatchingJob : IJobParallelFor
     private void SolveNeoHookeanHydrostatic(
         float3 f0, float3 f1, float3 f2,
         float3 d0, float3 d1, float3 d2,
-        float restJ,
         ref float C,
         ref float3 g0,
         ref float3 g1,
@@ -426,7 +418,6 @@ public struct ShapeMatchingJob : IJobParallelFor
 
         float J = math.dot(f0, cof0);
 
-        // C = J - restJ;
         C = J - 1f;
 
         g1 = d0.x * cof0 + d1.x * cof1 + d2.x * cof2;
