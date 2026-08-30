@@ -1,9 +1,10 @@
 using Unity.Collections;
 using UnityEngine;
-using collisionTest;
+using CollisionHandler;
 using Unity.Mathematics;
 using Unity.Jobs;
 using Unity.Burst;
+using System.Runtime.CompilerServices;
 
 namespace HelperScripts
 {
@@ -129,6 +130,7 @@ public static class RadixSorter
                 chunkSize = chunkSize
             };
             handle = populateAuxList.Schedule(numberOfChunks, 1, handle);
+            // handle.Complete();
 
             var aux = input;
             input = output;

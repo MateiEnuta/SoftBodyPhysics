@@ -5,6 +5,7 @@ using UnityEngine;
 using SolverStructs;
 using System.Linq;
 using Unity.Jobs;
+using CollisionHandler;
 
 public class PhysicsSolver : MonoBehaviour
 {
@@ -63,56 +64,80 @@ public class PhysicsSolver : MonoBehaviour
         float bigTetVol = cellVolume * (1f/3f);
         float smallTetsVol = cellVolume * (1f/6f);
 
-        for (int i = 0; i < substeps; i++)
-        {
-            ParticleUpdateJob particleUpdateJob = new ParticleUpdateJob
-            {
-                gravity = gravity,
-                dt = dt, particles = particles.AsArray()
-            };
-            handle = particleUpdateJob.Schedule(particleCount, 32, handle);
+        FullCollisionJob.RunCollision(
+                dt,
+                targetLatticeDimensions,
+                ref handle,
+                particles,
+                latticeCells,
+                collisionVertices,
+                collisionTriangles,
+                collisionEdges,
+                collisionWrapers
+            );
 
-            int channelStart = 0;
-            for (int chl = 0; chl < 8; chl++)
-            {
-                ShapeMatchingJob shapeMatchingJob = new ShapeMatchingJob
-                {
-                    dt = dt, damping = damping, channelStart = channelStart,
-                    halfD = targetLatticeDimensions * 0.5f,
-                    bigTetVol = bigTetVol, smallTetsVol = smallTetsVol,
-                    latticeCells = latticeCells.AsArray(),
-                    latticeCellBodyRef = latticeCellBodyRef.AsArray(),
-                    bodyMu = bodyMu.AsArray(),
-                    bodyLambda = bodyLambda.AsArray(),
-                    particles = particles.AsArray()
-                };
-                handle = shapeMatchingJob.Schedule(globalChlCount[chl], 1, handle);
-                channelStart += globalChlCount[chl];
-            }
+        // for (int i = 0; i < substeps; i++)
+        // {
+        //     ParticleUpdateJob particleUpdateJob = new ParticleUpdateJob
+        //     {
+        //         gravity = gravity,
+        //         dt = dt, particles = particles.AsArray()
+        //     };
+        //     handle = particleUpdateJob.Schedule(particleCount, 32, handle);
 
-            BasicPlaneColJob basicPlaneColJob = new BasicPlaneColJob
-            {
-                yPlanePos = 0f, latticeCells = latticeCells.AsArray(),
-                collisionVertices = collisionVertices.AsArray(), collisionWrapers = collisionWrapers.AsArray(),
-                particles = particles.AsArray()
-            };
-            handle = basicPlaneColJob.Schedule(collisionWraperCount, 1, handle);
+        //     int channelStart = 0;
+        //     for (int chl = 0; chl < 8; chl++)
+        //     {
+        //         ShapeMatchingJob shapeMatchingJob = new ShapeMatchingJob
+        //         {
+        //             dt = dt, damping = damping, channelStart = channelStart,
+        //             halfD = targetLatticeDimensions * 0.5f,
+        //             bigTetVol = bigTetVol, smallTetsVol = smallTetsVol,
+        //             latticeCells = latticeCells.AsArray(),
+        //             latticeCellBodyRef = latticeCellBodyRef.AsArray(),
+        //             bodyMu = bodyMu.AsArray(),
+        //             bodyLambda = bodyLambda.AsArray(),
+        //             particles = particles.AsArray()
+        //         };
+        //         handle = shapeMatchingJob.Schedule(globalChlCount[chl], 1, handle);
+        //         channelStart += globalChlCount[chl];
+        //     }
 
-            // channelStart = 0;
-            // for (int chl = 0; chl < 8; chl++)
-            // {
-            //     TetDampingJob tetDampingJob = new TetDampingJob
-            //     {
-            //         dt = dt,
-            //         damping = damping,
-            //         channelStart = channelStart,
-            //         latticeCells = latticeCells.AsArray(),
-            //         particles = particles.AsArray()
-            //     };
-            //     handle = tetDampingJob.Schedule(globalChlCount[chl], 1, handle);
-            //     channelStart += globalChlCount[chl];
-            // }
-        }
+        //     FullCollisionJob.RunCollision(
+        //         dt,
+        //         targetLatticeDimensions,
+        //         ref handle,
+        //         particles,
+        //         latticeCells,
+        //         collisionVertices,
+        //         collisionTriangles,
+        //         collisionEdges,
+        //         collisionWrapers
+        //     );
+
+        //     BasicPlaneColJob basicPlaneColJob = new BasicPlaneColJob
+        //     {
+        //         yPlanePos = 0f, latticeCells = latticeCells.AsArray(),
+        //         collisionVertices = collisionVertices.AsArray(), collisionWrapers = collisionWrapers.AsArray(),
+        //         particles = particles.AsArray()
+        //     };
+        //     handle = basicPlaneColJob.Schedule(collisionWraperCount, 1, handle);
+
+        //     // channelStart = 0;
+        //     // for (int chl = 0; chl < 8; chl++)
+        //     // {
+        //     //     TetDampingJob tetDampingJob = new TetDampingJob
+        //     //     {
+        //     //         dt = dt,
+        //     //         damping = damping,
+        //     //         channelStart = channelStart,
+        //     //         latticeCells = latticeCells.AsArray(),
+        //     //         particles = particles.AsArray()
+        //     //     };
+        //     //     handle = tetDampingJob.Schedule(globalChlCount[chl], 1, handle);
+        //     //     channelStart += globalChlCount[chl];
+        //     // }
+        // }
 
         VisVertsUpdateJob visVertsUpdateJob = new VisVertsUpdateJob
         {
@@ -375,6 +400,11 @@ public class PhysicsSolver : MonoBehaviour
 
     private void OnDisable()
     {
+        // TODO :
+        // Make it so that the disable function would be called outside this script
+        // so that if multiple solvers use the collision solver they would not break
+        FullCollisionJob.Disable();
+
         DisposeLists();
     }
 

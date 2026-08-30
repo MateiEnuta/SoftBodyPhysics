@@ -500,15 +500,15 @@ public class CollisionAlgoTest : MonoBehaviour
         };
         handle = addHashCells.Schedule(numberOfCells, 4, handle);
         // Sort pairs by cell
-        RadixSorter.SortCellEntries(
-            ref handle,
-            numberOfRadixChunks,
-            totalCellCount.Value,
-            cellsEntries64,
-            auxCellsEntries64,
-            histograms,
-            histogramsOffsets
-        );
+        // RadixSorter.SortCellEntries(
+        //     ref handle,
+        //     numberOfRadixChunks,
+        //     totalCellCount.Value,
+        //     cellsEntries64,
+        //     auxCellsEntries64,
+        //     histograms,
+        //     histogramsOffsets
+        // );
 
         CountCellRanges countCellRanges = new CountCellRanges
         {
@@ -547,16 +547,16 @@ public class CollisionAlgoTest : MonoBehaviour
         // Sort to make the same pairs be next to each other
         if (totalPossiblePairs.Value < 50000)
             handle = initialColPairs.AsArray().SortJob(new ULongComparer()).Schedule(handle);
-        else
-            RadixSorter.SortPairEntries(
-                ref handle,
-                numberOfRadixChunks,
-                totalPossiblePairs.Value,
-                initialColPairs,
-                auxInitialColPairs,
-                histograms,
-                histogramsOffsets
-            );
+        // else
+        //     RadixSorter.SortPairEntries(
+        //         ref handle,
+        //         numberOfRadixChunks,
+        //         totalPossiblePairs.Value,
+        //         initialColPairs,
+        //         auxInitialColPairs,
+        //         histograms,
+        //         histogramsOffsets
+        //     );
 
         var PairUniquer = new PairUniquer
         {
