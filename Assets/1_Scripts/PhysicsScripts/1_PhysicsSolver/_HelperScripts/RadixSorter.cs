@@ -8,6 +8,19 @@ using System.Runtime.CompilerServices;
 
 namespace HelperScripts
 {
+#region Data structures
+public struct HashCellEntry64
+{
+    public ulong key;
+    public int cellIndex;
+
+    public HashCellEntry64(ulong key, int cellIndex)
+    {
+        this.key = key;
+        this.cellIndex = cellIndex;
+    }
+}
+#endregion
 public static class RadixSorter
 {
 #region Cell ranges sort
