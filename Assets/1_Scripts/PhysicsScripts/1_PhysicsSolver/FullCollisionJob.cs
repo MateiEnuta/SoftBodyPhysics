@@ -9,6 +9,7 @@ using System.Collections.Generic;
 using HelperScripts;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices.WindowsRuntime;
+using System.Linq;
 
 
 namespace CollisionHandler
@@ -22,9 +23,8 @@ public struct CreateCellAABB : IJobParallelFor
     [ReadOnly] public int3 hashGridSize;
     [ReadOnly] public NativeList<Particle> particles;
     [ReadOnly] public NativeList<LatticeCell> latticeCells;
-    [WriteOnly] public NativeArray<int> cellAABBmin;
+    [WriteOnly] public NativeArray<int3> cellAABBmin;
     [WriteOnly] public NativeArray<uint> cellAABBspan;
-    [WriteOnly] public NativeArray<uint> cellAABBgrid;
 
     
     public void Execute(int cellIndex)
@@ -45,27 +45,8 @@ public struct CreateCellAABB : IJobParallelFor
         int3 minCorner = (int3)floor(minPos * invCellSize);
         int3 maxCorner = (int3)floor(maxPos * invCellSize);
 
-        // Wrap into hash grid [0, hashGridSize)
-        int3 hashCell;
-        hashCell.x = ((minCorner.x % hashGridSize.x) + hashGridSize.x) % hashGridSize.x;
-        hashCell.y = ((minCorner.y % hashGridSize.y) + hashGridSize.y) % hashGridSize.y;
-        hashCell.z = ((minCorner.z % hashGridSize.z) + hashGridSize.z) % hashGridSize.z;
-
-        // Convert to linear index
-        int hashIndex = (
-            hashCell.x +
-            hashCell.y * hashGridSize.x +
-            hashCell.z * hashGridSize.x * hashGridSize.y
-        );
-
-        int3 gridId;
-        gridId.x = minCorner.x / hashGridSize.x;
-        gridId.y = minCorner.y / hashGridSize.y;
-        gridId.z = minCorner.z / hashGridSize.z;
-
-        cellAABBmin[cellIndex] = hashIndex;
+        cellAABBmin[cellIndex] = minCorner;
         cellAABBspan[cellIndex] = FullCollisionJob.PackWrappedInt(maxCorner - minCorner + 1);
-        cellAABBgrid[cellIndex] = FullCollisionJob.PackWrappedInt(gridId);
     }
 }
 
@@ -74,13 +55,10 @@ public struct CountAABBGridPos : IJobParallelFor
 {
     [ReadOnly] public int3 hashGridSize;
     [ReadOnly] public int chunkSize;
-    [ReadOnly] public NativeList<int> cellAABBmin;
+    [ReadOnly] public NativeList<int3> cellAABBmin;
     [ReadOnly] public NativeList<uint> cellAABBspan;
     [NativeDisableParallelForRestriction]
     public NativeArray<int> hashGridCells;
-    [NativeDisableParallelForRestriction]
-    [WriteOnly] public NativeArray<int> hashGridCellSizes;
-    [WriteOnly] public NativeArray<int> chunkTotalGridSize;
 
 
     public void Execute(int chunkIndex)
@@ -91,141 +69,36 @@ public struct CountAABBGridPos : IJobParallelFor
 
         for (int i = start; i < end; i++)
         {
-            int cellStart = cellAABBmin[i];
+            int3 cellMin = cellAABBmin[i];
             int3 cellSpan = FullCollisionJob.UnpackUInt(cellAABBspan[i]);
-
-            // Pre-wrap the start coordinate
-            int startX = cellStart % hashGridSize.x;
-            int startY = cellStart % hashGridSize.y;
-            int startZ = cellStart % hashGridSize.z;
 
             for (int x = 0; x < cellSpan.x; x++)
             for (int y = 0; y < cellSpan.y; y++)
             for (int z = 0; z < cellSpan.z; z++)
             {
-                int wrappedX = (startX + x) % hashGridSize.x;
-                int wrappedY = (startY + y) % hashGridSize.y;
-                int wrappedZ = (startZ + z) % hashGridSize.z;
+                int3 currentCellPos = cellMin + new int3(x,y,z);
+                int3 hashGridPos = ((currentCellPos % hashGridSize) + hashGridSize) % hashGridSize;
                 
                 int cellAABBindex = 
-                    wrappedX +
-                    wrappedY * hashGridSize.x +
-                    wrappedZ * hashGridSize.x * hashGridSize.y;
+                    hashGridPos.x +
+                    hashGridPos.y * hashGridSize.x +
+                    hashGridPos.z * hashGridSize.x * hashGridSize.y;
                 
                 hashGridCells[chunkIndex * totalHashGridSize + cellAABBindex]++;
             }
         }
-
-        int previousCount = 0;
-        for (int i = 0; i < totalHashGridSize; i++)
-        {
-            int currentCellCount = hashGridCells[chunkIndex * totalHashGridSize + i];
-            hashGridCellSizes[chunkIndex * totalHashGridSize + i] = currentCellCount;
-            if (currentCellCount == 0) continue;
-            hashGridCells[chunkIndex * totalHashGridSize + i] += previousCount;
-            previousCount += currentCellCount;
-        }
-        chunkTotalGridSize[chunkIndex] = previousCount;
     }
 }
 
 [BurstCompile]
-public struct ScatterAABBCells : IJobParallelFor
-{
-    [ReadOnly] public int3 hashGridSize;
-    [ReadOnly] public int chunkSize;
-    [ReadOnly] public NativeList<int> cellAABBmin;
-    [ReadOnly] public NativeList<uint> cellAABBspan;
-    [ReadOnly] public NativeList<uint> cellAABBgrid;
-    [ReadOnly] public NativeArray<int> chunkTotalGridSize;
-    [NativeDisableParallelForRestriction]
-    public NativeArray<int> hashGridCells;
-    [NativeDisableParallelForRestriction]
-    [WriteOnly] public NativeArray<uint2> cellAABBentries;
-
-
-    public void Execute(int chunkIndex)
-    {
-        int start = chunkIndex * chunkSize;
-        int end = min(start + chunkSize, cellAABBmin.Length);
-        int totalHashGridSize = hashGridSize.x * hashGridSize.y * hashGridSize.z;
-
-        for (int i = start; i < end; i++)
-        {
-            int cellStart = cellAABBmin[i];
-            int3 cellSpan = FullCollisionJob.UnpackUInt(cellAABBspan[i]);
-            int3 startWorldCell = FullCollisionJob.UnpackUInt(cellAABBgrid[i]);
-
-            // Compute initial grid ID and local cell
-            int3 gridId;
-            gridId.x = startWorldCell.x / hashGridSize.x;
-            gridId.y = startWorldCell.y / hashGridSize.y;
-            gridId.z = startWorldCell.z / hashGridSize.z;
-
-            // Pre-wrap the start coordinate
-            int startX = cellStart % hashGridSize.x;
-            int startY = cellStart % hashGridSize.y;
-            int startZ = cellStart % hashGridSize.z;
-
-            for (int x = 0; x < cellSpan.x; x++)
-            for (int y = 0; y < cellSpan.y; y++)
-            for (int z = 0; z < cellSpan.z; z++)
-            {
-                // Update grid ID when wrapping
-                int currentGridX = gridId.x + (startX + x) / hashGridSize.x;
-                int currentGridY = gridId.y + (startY + y) / hashGridSize.y;
-                int currentGridZ = gridId.z + (startZ + z) / hashGridSize.z;
-                
-                uint currentGridId = FullCollisionJob.PackWrappedInt(new int3(currentGridX, currentGridY, currentGridZ));
-                
-                int wrappedX = (startX + x) % hashGridSize.x;
-                int wrappedY = (startY + y) % hashGridSize.y;
-                int wrappedZ = (startZ + z) % hashGridSize.z;
-                
-                int cellAABBindex = 
-                    wrappedX +
-                    wrappedY * hashGridSize.x +
-                    wrappedZ * hashGridSize.x * hashGridSize.y;
-                
-                cellAABBentries
-                    [--hashGridCells[chunkIndex * totalHashGridSize + cellAABBindex] + chunkTotalGridSize[chunkIndex]] 
-                    = new uint2(currentGridId, (uint)i);
-            }
-        }
-    }
-}
-
-[BurstCompile]
-public struct FindActiveGridCells : IJob
-{
-    [ReadOnly] public int3 hashGridSize;
-    [ReadOnly] public int numberOfChunks;
-    [ReadOnly] public NativeArray<int> hashGridCellSizes;
-    [WriteOnly] public NativeList<int> activeGridCells;
-
-    public void Execute()
-    {
-        int totalHashGridSize = hashGridSize.x * hashGridSize.y * hashGridSize.z;
-        
-        for (int i = 0; i < totalHashGridSize; i++)
-        for (int chunk = 0; chunk < numberOfChunks; chunk++)
-        {
-            if (hashGridCellSizes[chunk * totalHashGridSize + i] != 0)
-            {
-                activeGridCells.AddNoResize(i);
-                break;
-            }
-        }
-    }
-}
-
-[BurstCompile]
-public struct JustCount : IJob
+public struct PrefixSumGridCells : IJob
 {
     [ReadOnly] public int3 hashGridSize;
     [ReadOnly] public int numberOfChunks;
     public NativeArray<int> hashGridCells;
+    [WriteOnly] public NativeArray<int> hashGridCellOffsets;
     [WriteOnly] public NativeList<int> activeGridCells;
+
 
     public void Execute()
     {
@@ -241,11 +114,105 @@ public struct JustCount : IJob
             {
                 int currentCellCount = hashGridCells[chunk * totalHashGridSize + i];
                 if (currentCellCount == 0) continue;
-                hashGridCells[chunk * totalHashGridSize + i] = previousCount;
+                hashGridCells[chunk * totalHashGridSize + i] = 0;
+                hashGridCellOffsets[chunk * totalHashGridSize + i] = previousCount;
                 previousCount += currentCellCount;
             }
 
-            if (initialCount != previousCount) activeGridCells.AddNoResize(i);
+            if (initialCount != previousCount) activeGridCells.AddNoResize(previousCount);
+        }
+    }
+}
+
+[BurstCompile]
+public struct ScatterAABBCells : IJobParallelFor
+{
+    [ReadOnly] public int3 hashGridSize;
+    [ReadOnly] public int chunkSize;
+    [ReadOnly] public NativeList<int3> cellAABBmin;
+    [ReadOnly] public NativeList<uint> cellAABBspan;
+    [NativeDisableParallelForRestriction]
+    public NativeArray<int> hashGridCellOffsets;
+    [NativeDisableParallelForRestriction]
+    [WriteOnly] public NativeArray<uint2> cellAABBentries;
+
+
+    public void Execute(int chunkIndex)
+    {
+        int start = chunkIndex * chunkSize;
+        int end = min(start + chunkSize, cellAABBmin.Length);
+        int totalHashGridSize = hashGridSize.x * hashGridSize.y * hashGridSize.z;
+
+        for (int i = start; i < end; i++)
+        {
+            int3 cellMin = cellAABBmin[i];
+            int3 cellSpan = FullCollisionJob.UnpackUInt(cellAABBspan[i]);
+
+            for (int x = 0; x < cellSpan.x; x++)
+            for (int y = 0; y < cellSpan.y; y++)
+            for (int z = 0; z < cellSpan.z; z++)
+            {
+                int3 currentCellPos = cellMin + new int3(x,y,z);
+                int3 hashGridPos = ((currentCellPos % hashGridSize) + hashGridSize) % hashGridSize;
+                
+                int cellAABBindex = 
+                    hashGridPos.x +
+                    hashGridPos.y * hashGridSize.x +
+                    hashGridPos.z * hashGridSize.x * hashGridSize.y;
+                
+                cellAABBentries
+                    [hashGridCellOffsets[chunkIndex * totalHashGridSize + cellAABBindex]++]
+                    = new uint2(FullCollisionJob.PackWrappedInt(currentCellPos), (uint)i);
+            }
+        }
+    }
+}
+
+[BurstCompile]
+public struct SortGridCellEntries : IJobParallelFor
+{
+    [ReadOnly] public NativeList<int> activeGridCells;
+    [NativeDisableParallelForRestriction]
+    public NativeArray<uint2> cellAABBentries;
+
+    public void Execute(int gridCellIndex)
+    {
+        int cellStart = gridCellIndex == 0 ? 0 : activeGridCells[gridCellIndex - 1];
+        int cellEnd = activeGridCells[gridCellIndex];
+        int count = cellEnd - cellStart;
+
+        if (count <= 1) return;
+
+        // Insertion sort is faster for n < 64
+        InsertionSort(cellAABBentries, cellStart, count);
+    }
+
+    // [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static void InsertionSort(NativeArray<uint2> arr, int start, int count)
+    {
+        for (int i = 1; i < count; i++)
+        {
+            uint2 key = arr[start + i];
+            int j = i - 1;
+
+            // Inline comparison (no function call)
+            while (j >= 0)
+            {
+                uint2 candidate = arr[start + j];
+                
+                // Compare packed grid IDs directly
+                if (candidate.x > key.x)
+                {
+                    arr[start + j + 1] = candidate;
+                    j--;
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            arr[start + j + 1] = key;
         }
     }
 }
@@ -308,15 +275,13 @@ public static class FullCollisionJob
 
 #region Collision data
     private static bool isInitialised = false;
-    private static int3 hashGridSize = new int3(20);
+    private static int3 hashGridSize = new int3(24);
     private static int numberOfChunks = 16;
 
-    private static NativeList<int> cellAABBmin;
+    private static NativeList<int3> cellAABBmin;
     private static NativeList<uint> cellAABBspan;
-    private static NativeList<uint> cellAABBgrid;
     private static NativeArray<int> hashGridCells;
-    private static NativeArray<int> hashGridCellSizes;
-    private static NativeArray<int> chunkTotalGridSize;
+    private static NativeArray<int> hashGridCellOffsets;
     private static NativeList<int> activeGridCells;
     private static NativeList<uint2> cellAABBentries;
 
@@ -340,20 +305,20 @@ public static class FullCollisionJob
         int numberOfCells = latticeCells.Length;
         Initialise();
 
+
         cellAABBmin.ResizeUninitialized(numberOfCells);
         cellAABBspan.ResizeUninitialized(numberOfCells);
-        cellAABBgrid.ResizeUninitialized(numberOfCells);
         activeGridCells.Clear();
+
 
         CreateCellAABB createCellAABB = new CreateCellAABB
         {
-            invCellSize = 1f / hashCellSize,
+            invCellSize = 1f / (hashCellSize * 1),
             hashGridSize = hashGridSize,
             particles = particles,
             latticeCells = latticeCells,
             cellAABBmin = cellAABBmin.AsDeferredJobArray(),
-            cellAABBspan = cellAABBspan.AsDeferredJobArray(),
-            cellAABBgrid = cellAABBgrid.AsDeferredJobArray()
+            cellAABBspan = cellAABBspan.AsDeferredJobArray()
         };
         handle = createCellAABB.Schedule(numberOfCells, 8, handle);
         CountAABBGridPos countAABBGridPos = new CountAABBGridPos
@@ -362,32 +327,22 @@ public static class FullCollisionJob
             chunkSize = (numberOfCells + numberOfChunks - 1) / numberOfChunks,
             cellAABBmin = cellAABBmin,
             cellAABBspan = cellAABBspan,
-            hashGridCells = hashGridCells,
-            hashGridCellSizes = hashGridCellSizes,
-            chunkTotalGridSize = chunkTotalGridSize
+            hashGridCells = hashGridCells
         };
         handle = countAABBGridPos.Schedule(numberOfChunks, 1, handle);
-        // JustCount justCount = new JustCount
-        // {
-        //     hashGridSize = hashGridSize,
-        //     numberOfChunks = numberOfChunks,
-        //     hashGridCells = hashGridCellSizes,
-        //     activeGridCells = activeGridCells
-        // };
-        // handle = justCount.Schedule(handle);
+        PrefixSumGridCells prefixSumGridCells = new PrefixSumGridCells
+        {
+            hashGridSize = hashGridSize,
+            numberOfChunks = numberOfChunks,
+            hashGridCells = hashGridCells,
+            hashGridCellOffsets = hashGridCellOffsets,
+            activeGridCells = activeGridCells
+        };
+        handle = prefixSumGridCells.Schedule(handle);
         handle.Complete();
 
 
-        int totalAABBCount = 0;
-        for (int i = 0; i < numberOfChunks; i++)
-        {
-            int currentChunkCount = chunkTotalGridSize[i];
-            chunkTotalGridSize[i] = totalAABBCount;
-            totalAABBCount += currentChunkCount;
-        }
-
-
-        cellAABBentries.ResizeUninitialized(totalAABBCount);
+        cellAABBentries.ResizeUninitialized(activeGridCells[activeGridCells.Length-1]);
 
 
         ScatterAABBCells scatterAABBCells = new ScatterAABBCells
@@ -396,50 +351,42 @@ public static class FullCollisionJob
             chunkSize = (numberOfCells + numberOfChunks - 1) / numberOfChunks,
             cellAABBmin = cellAABBmin,
             cellAABBspan = cellAABBspan,
-            cellAABBgrid = cellAABBgrid,
-            chunkTotalGridSize = chunkTotalGridSize,
-            hashGridCells = hashGridCells,
+            hashGridCellOffsets = hashGridCellOffsets,
             cellAABBentries = cellAABBentries.AsDeferredJobArray()
         };
         handle = scatterAABBCells.Schedule(numberOfChunks, 1, handle);
-        FindActiveGridCells findActiveGridCells = new FindActiveGridCells
+        SortGridCellEntries sortGridCellEntries = new SortGridCellEntries
         {
-            hashGridSize = hashGridSize,
-            numberOfChunks = numberOfChunks,
-            hashGridCellSizes = hashGridCellSizes,
-            activeGridCells = activeGridCells
+            activeGridCells = activeGridCells,
+            cellAABBentries = cellAABBentries.AsDeferredJobArray()
         };
-        handle = findActiveGridCells.Schedule(handle);
+        handle = sortGridCellEntries.Schedule(activeGridCells.Length, 1, handle);
         handle.Complete();
-        
-        
-        int max = 0;
-        float averageNon0 = 0;
-        int numberGridCells = 0;
-        int larger100 = 0;
-        int larger50 = 0;
-        int smaller10 = 0;
-        for (int i = 0; i < hashGridSize.x * hashGridSize.y * hashGridSize.z * numberOfChunks; i++)
-        {
-            int currentGridSize = hashGridCellSizes[i];
-            if (currentGridSize != 0) { averageNon0 += currentGridSize; numberGridCells++; }
-            if (currentGridSize > max) max = currentGridSize;
-            if (currentGridSize > 100) larger100++;
-            if (currentGridSize > 50) larger50++;
-            if (currentGridSize < 10) smaller10++;
-            hashGridCells[i] = hashGridCellSizes[i] = 0;
-        }
-        averageNon0 /= numberGridCells;
-        Debug.Log(
-            "Active cells: " + numberGridCells +
-            "\nMax number in a cell: " + max +
-            "\nAverage non 0: " + averageNon0 +
-            "\nLarger than 100: " + larger100 +
-            "\nLarger than 50: " + larger50 +
-            "\nSmaller than 10: " + smaller10
-        );
+
+
+        DebugCollision();
     }
 #endregion
+#region Helper Functions
+
+    private static void DebugCollision()
+    {
+        int maxGridCellSize = 0;
+        float averageGridCellSize = 0;
+        for (int i = 0; i < activeGridCells.Length; i++)
+        {
+            int gridCellSize = activeGridCells[i] - (i==0 ? 0 : activeGridCells[i-1]);
+            if (gridCellSize > maxGridCellSize) maxGridCellSize = gridCellSize;
+            averageGridCellSize += gridCellSize;
+        }
+        averageGridCellSize /= activeGridCells.Length;
+        Debug.Log(
+            "Number of AABB entries: " + activeGridCells[activeGridCells.Length-1] +
+            "\nNumber of active grid cells: " + activeGridCells.Length +
+            "\nMax grid cell size: " + maxGridCellSize +
+            "\nAverage grid cell size: " + averageGridCellSize
+        );
+    }
 
     public static void Initialise()
     {
@@ -448,14 +395,12 @@ public static class FullCollisionJob
 
         cellAABBmin = new (Allocator.Persistent);
         cellAABBspan = new (Allocator.Persistent);
-        cellAABBgrid = new (Allocator.Persistent);
         hashGridCells = new NativeArray<int>(
             numberOfChunks * hashGridSize.x * hashGridSize.y * hashGridSize.z,
         Allocator.Persistent);
-        hashGridCellSizes = new NativeArray<int>(
+        hashGridCellOffsets = new NativeArray<int>(
             numberOfChunks * hashGridSize.x * hashGridSize.y * hashGridSize.z,
         Allocator.Persistent);
-        chunkTotalGridSize = new NativeArray<int>(numberOfChunks, Allocator.Persistent);
         activeGridCells = new (hashGridSize.x * hashGridSize.y * hashGridSize.z, Allocator.Persistent);
         cellAABBentries = new (Allocator.Persistent);
     }
@@ -467,13 +412,12 @@ public static class FullCollisionJob
 
         cellAABBmin.Dispose();
         cellAABBspan.Dispose();
-        cellAABBgrid.Dispose();
         hashGridCells.Dispose();
-        hashGridCellSizes.Dispose();
-        chunkTotalGridSize.Dispose();
+        hashGridCellOffsets.Dispose();
         activeGridCells.Dispose();
         cellAABBentries.Dispose();
     }
 
+#endregion
 }
 }
