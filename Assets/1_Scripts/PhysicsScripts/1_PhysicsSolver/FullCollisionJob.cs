@@ -46,7 +46,7 @@ public struct CreateCellAABB : IJobParallelFor
         int3 maxCorner = (int3)floor(maxPos * invCellSize);
 
         cellAABBmin[cellIndex] = minCorner;
-        cellAABBspan[cellIndex] = FullCollisionJob.PackWrappedInt(maxCorner - minCorner + 1);
+        cellAABBspan[cellIndex] = FullCollisionJob.PackSpanUint(maxCorner - minCorner + 1);
     }
 }
 
@@ -70,7 +70,7 @@ public struct CountAABBGridPos : IJobParallelFor
         for (int i = start; i < end; i++)
         {
             int3 cellMin = cellAABBmin[i];
-            int3 cellSpan = FullCollisionJob.UnpackUInt(cellAABBspan[i]);
+            int3 cellSpan = FullCollisionJob.UnpackSpanUint(cellAABBspan[i]);
 
             for (int x = 0; x < cellSpan.x; x++)
             for (int y = 0; y < cellSpan.y; y++)
@@ -148,7 +148,7 @@ public struct ScatterAABBCells : IJobParallelFor
         for (int i = start; i < end; i++)
         {
             int3 cellMin = cellAABBmin[i];
-            int3 cellSpan = FullCollisionJob.UnpackUInt(cellAABBspan[i]);
+            int3 cellSpan = FullCollisionJob.UnpackSpanUint(cellAABBspan[i]);
 
             for (int x = 0; x < cellSpan.x; x++)
             for (int y = 0; y < cellSpan.y; y++)
@@ -176,6 +176,7 @@ public struct SortGridCellEntries : IJobParallelFor
     [ReadOnly] public NativeArray<int> prefixChunkSizes;
     [ReadOnly] public int prefixChunkSize;
     [ReadOnly] public NativeList<int3> cellAABBmin;
+    [ReadOnly] public NativeList<uint2> latticeCellLatticeCoords;
     [ReadOnly] public NativeSlice<int> hashGridCellOffsets;
     [NativeDisableParallelForRestriction]
     public NativeArray<int4> cellAABBentries;
@@ -212,18 +213,22 @@ public struct SortGridCellEntries : IJobParallelFor
             {
                 int bodyAIndex = cellAABBentries[i].w;
                 int3 minACell = cellAABBmin[bodyAIndex];
+                uint2 latticeACoords = latticeCellLatticeCoords[bodyAIndex];
 
                 for (int j = i + 1; j < end; j++)
                 {
                     int bodyBIndex = cellAABBentries[j].w;
                     int3 minBCell = cellAABBmin[bodyBIndex];
+                    uint2 latticeBCoords = latticeCellLatticeCoords[bodyBIndex];
 
                     int3 commonMinCell = max(minACell, minBCell);
 
-                    if (all(commonMinCell == key))
-                    {
-                        totalPairCount++;
-                    }
+                    if (!all(commonMinCell == key)) continue;
+                    if (latticeACoords.x == latticeBCoords.x) continue;
+                    // if (latticeACoords.x == latticeBCoords.x && 
+                    //     FullCollisionJob.AreLocalNeighbours10(latticeACoords.y, latticeBCoords.y)) continue;
+
+                    totalPairCount++;
                 }
             }
 
@@ -308,6 +313,7 @@ public struct AddPairs : IJobParallelFor
     [ReadOnly] public NativeArray<int> prefixChunkSizes;
     [ReadOnly] public int prefixChunkSize;
     [ReadOnly] public NativeList<int3> cellAABBmin;
+    [ReadOnly] public NativeList<uint2> latticeCellLatticeCoords;
     [ReadOnly] public NativeSlice<int> hashGridCellOffsets;
     [ReadOnly] public NativeArray<int4> cellAABBentries;
     [ReadOnly] public NativeArray<int> gridCellPairs;
@@ -342,18 +348,22 @@ public struct AddPairs : IJobParallelFor
             {
                 int bodyAIndex = cellAABBentries[i].w;
                 int3 minACell = cellAABBmin[bodyAIndex];
+                uint2 latticeACoords = latticeCellLatticeCoords[bodyAIndex];
 
                 for (int j = i + 1; j < end; j++)
                 {
                     int bodyBIndex = cellAABBentries[j].w;
                     int3 minBCell = cellAABBmin[bodyBIndex];
+                    uint2 latticeBCoords = latticeCellLatticeCoords[bodyBIndex];
 
                     int3 commonMinCell = max(minACell, minBCell);
 
-                    if (all(commonMinCell == key))
-                    {
-                        finalPairs[writeStart++] = new int2(bodyAIndex, bodyBIndex);
-                    }
+                    if (!all(commonMinCell == key)) continue;
+                    if (latticeACoords.x == latticeBCoords.x) continue;
+                    // if (latticeACoords.x == latticeBCoords.x && 
+                    //     FullCollisionJob.AreLocalNeighbours10(latticeACoords.y, latticeBCoords.y)) continue;
+
+                    finalPairs[writeStart++] = new int2(bodyAIndex, bodyBIndex);
                 }
             }
 
@@ -379,25 +389,6 @@ public static class FullCollisionJob
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static int3 UnpackUInt(uint span)
-    {
-        int sx = (int)( span         & ((1u << 11) - 1u)) + 1;
-        int sy = (int)((span >> 11)  & ((1u << 10) - 1u)) + 1;
-        int sz = (int)((span >> 21)  & ((1u << 11) - 1u)) + 1;
-        return new int3(sx, sy, sz);
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static uint PackWrappedInt(int3 xyz, int bitsX = 11, int bitsY = 10, int bitsZ = 11)
-    {
-        uint sx = (uint)(xyz.x - 1);
-        uint sy = (uint)(xyz.y - 1);
-        uint sz = (uint)(xyz.z - 1);
-
-        return sx | (sy << bitsX) | (sz << (bitsX + bitsY));
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ulong PackWrappedLong(int3 xyz, int bitsX = 22, int bitsY = 20, int bitsZ = 22)
     {
         ulong px = WrapToBits(xyz.x, bitsX);
@@ -414,6 +405,44 @@ public static class FullCollisionJob
         long r = value % period;
         if (r < 0) r += period;
         return (ulong)r;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int3 UnpackSpanUint(uint span)
+    {
+        int sx = (int)( span         & ((1u << 10) - 1u)) + 1;
+        int sy = (int)((span >> 10)  & ((1u << 10) - 1u)) + 1;
+        int sz = (int)((span >> 20)  & ((1u << 10) - 1u)) + 1;
+        return new int3(sx, sy, sz);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static uint PackSpanUint(int3 xyz, int bitsX = 10, int bitsY = 10, int bitsZ = 10)
+    {
+        uint sx = (uint)(xyz.x - 1);
+        uint sy = (uint)(xyz.y - 1);
+        uint sz = (uint)(xyz.z - 1);
+
+        return sx | (sy << bitsX) | (sz << (bitsX + bitsY));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool AreLocalNeighbours10(uint packedA, uint packedB)
+    {
+        const uint Mask = 0x3FFu;
+
+        int dx = (int)( packedA        & Mask) -
+                (int)( packedB        & Mask);
+
+        int dy = (int)((packedA >> 10) & Mask) -
+                (int)((packedB >> 10) & Mask);
+
+        int dz = (int)((packedA >> 20) & Mask) -
+                (int)((packedB >> 20) & Mask);
+
+        return abs(dx) <= 1 &&
+               abs(dy) <= 1 &&
+               abs(dz) <= 1;
     }
 #endregion
 
@@ -445,6 +474,7 @@ public static class FullCollisionJob
         ref JobHandle handle,
         NativeList<Particle>        particles,
         NativeList<LatticeCell>     latticeCells,
+        NativeList<uint2>           latticeCellLatticeCoords,
         NativeList<DynamicVertex>   collisionVertices,
         NativeList<int3>            collisionTriangles,
         NativeList<int2>            collisionEdges,
@@ -521,6 +551,7 @@ public static class FullCollisionJob
             prefixChunkSize = prefixChunkSize,
             prefixChunkSizes = prefixChunkSizes,
             cellAABBmin = cellAABBmin,
+            latticeCellLatticeCoords = latticeCellLatticeCoords,
             hashGridCellOffsets = new NativeSlice<int>(hashGridCellOffsets, numberOfGridCells * (numberOfChunks-1)),
             cellAABBentries = cellAABBentries.AsDeferredJobArray(),
             gridCellPairs = gridCellPairs
@@ -544,6 +575,7 @@ public static class FullCollisionJob
             prefixChunkSize = prefixChunkSize,
             prefixChunkSizes = prefixChunkSizes,
             cellAABBmin = cellAABBmin,
+            latticeCellLatticeCoords = latticeCellLatticeCoords,
             hashGridCellOffsets = new NativeSlice<int>(hashGridCellOffsets, numberOfGridCells * (numberOfChunks-1)),
             cellAABBentries = cellAABBentries.AsDeferredJobArray(),
             gridCellPairs = gridCellPairs,
@@ -553,7 +585,7 @@ public static class FullCollisionJob
         handle.Complete();
 
         
-        // DebugCollision(particles, latticeCells);
+        DebugCollision(particles, latticeCells);
     }
 #endregion
 #region Helper Functions
