@@ -561,6 +561,120 @@ public struct AddCandidatePairs : IJobParallelFor
     }
 }
 
+
+[BurstCompile]
+public struct BuildCollisionMemoryMapJob : IJob
+{
+    [ReadOnly] public NativeArray<LatticeCell> latticeCells;
+    [ReadOnly] public NativeArray<int2> candidatePairs;
+    [ReadOnly] public int numberOfParticles;
+    
+    // Will hold counts, then morph into offsets, then get consumed as write-pointers
+    public NativeArray<int> cellCollisionOffsets;
+    public NativeArray<int> particleCorrectionOffsets;
+
+    [WriteOnly] public NativeArray<int> contactCellIndices;
+    [WriteOnly] public NativeArray<int> cellBufferPointers;
+    [WriteOnly] public NativeArray<int> particleBufferPointers;
+
+    public void Execute()
+    {
+        for (int i = 0; i < latticeCells.Length; i++) cellCollisionOffsets[i] = 0;
+        for (int i = 0; i < numberOfParticles; i++) particleCorrectionOffsets[i] = 0;
+
+        // ==========================================
+        // 1. COUNT PASS
+        // ==========================================
+        for (int i = 0; i < candidatePairs.Length; i++)
+        {
+            int cellA = candidatePairs[i].x;
+            int cellB = candidatePairs[i].y;
+
+            cellCollisionOffsets[cellA]++;
+            cellCollisionOffsets[cellB]++;
+
+            LatticeCell c1 = latticeCells[cellA];
+            particleCorrectionOffsets[c1.v0]++;
+            particleCorrectionOffsets[c1.v1]++;
+            particleCorrectionOffsets[c1.v2]++;
+            particleCorrectionOffsets[c1.v3]++;
+            particleCorrectionOffsets[c1.v4]++;
+            particleCorrectionOffsets[c1.v5]++;
+            particleCorrectionOffsets[c1.v6]++;
+            particleCorrectionOffsets[c1.v7]++;
+
+            LatticeCell c2 = latticeCells[cellB];
+            particleCorrectionOffsets[c2.v0]++;
+            particleCorrectionOffsets[c2.v1]++;
+            particleCorrectionOffsets[c2.v2]++;
+            particleCorrectionOffsets[c2.v3]++;
+            particleCorrectionOffsets[c2.v4]++;
+            particleCorrectionOffsets[c2.v5]++;
+            particleCorrectionOffsets[c2.v6]++;
+            particleCorrectionOffsets[c2.v7]++;
+        }
+
+        // ==========================================
+        // 2 & 3. PREFIX SUM PASSES (Morph Counts to Offsets)
+        // ==========================================
+        int currentOffset = 0;
+        for (int i = 0; i < latticeCells.Length; i++)
+        {
+            int count = cellCollisionOffsets[i];
+            cellCollisionOffsets[i] = currentOffset; 
+            currentOffset += count;
+        }
+
+        currentOffset = 0;
+        for (int i = 0; i < numberOfParticles; i++)
+        {
+            int count = particleCorrectionOffsets[i];
+            particleCorrectionOffsets[i] = currentOffset;
+            currentOffset += count;
+        }
+
+        // ==========================================
+        // 4. SCATTER PASS (Distribute Data)
+        // ==========================================
+        for (int i = 0; i < candidatePairs.Length; i++)
+        {
+            int cellA = candidatePairs[i].x;
+            int cellB = candidatePairs[i].y;
+
+            // Note: The postfix ++ consumes the offset, acting as an auto-advancing pointer
+            int currentAIdx = cellCollisionOffsets[cellA]++;
+            int currentBIdx = cellCollisionOffsets[cellB]++;
+            
+            contactCellIndices[currentAIdx] = cellB;
+            contactCellIndices[currentBIdx] = cellA;
+            
+            cellBufferPointers[currentAIdx] = i * 32;
+            cellBufferPointers[currentBIdx] = i * 32 + 8;
+
+            LatticeCell c1 = latticeCells[cellA];
+            particleBufferPointers[particleCorrectionOffsets[c1.v0]++] = i * 32;
+            particleBufferPointers[particleCorrectionOffsets[c1.v1]++] = i * 32 + 1;
+            particleBufferPointers[particleCorrectionOffsets[c1.v2]++] = i * 32 + 2;
+            particleBufferPointers[particleCorrectionOffsets[c1.v3]++] = i * 32 + 3;
+            particleBufferPointers[particleCorrectionOffsets[c1.v4]++] = i * 32 + 4;
+            particleBufferPointers[particleCorrectionOffsets[c1.v5]++] = i * 32 + 5;
+            particleBufferPointers[particleCorrectionOffsets[c1.v6]++] = i * 32 + 6;
+            particleBufferPointers[particleCorrectionOffsets[c1.v7]++] = i * 32 + 7;
+
+            LatticeCell c2 = latticeCells[cellB];
+            particleBufferPointers[particleCorrectionOffsets[c2.v0]++] = i * 32 + 16;
+            particleBufferPointers[particleCorrectionOffsets[c2.v1]++] = i * 32 + 16 + 1;
+            particleBufferPointers[particleCorrectionOffsets[c2.v2]++] = i * 32 + 16 + 2;
+            particleBufferPointers[particleCorrectionOffsets[c2.v3]++] = i * 32 + 16 + 3;
+            particleBufferPointers[particleCorrectionOffsets[c2.v4]++] = i * 32 + 16 + 4;
+            particleBufferPointers[particleCorrectionOffsets[c2.v5]++] = i * 32 + 16 + 5;
+            particleBufferPointers[particleCorrectionOffsets[c2.v6]++] = i * 32 + 16 + 6;
+            particleBufferPointers[particleCorrectionOffsets[c2.v7]++] = i * 32 + 16 + 7;
+        }
+    }
+}
+
+
 #endregion
 
 
@@ -642,7 +756,6 @@ public static class FullCollisionJob
     }
 #endregion
 
-
 #region Collision data
     private static bool isInitialised = false;
     private static int3 broadphaseGridSize = new int3(24);
@@ -660,12 +773,19 @@ public static class FullCollisionJob
     private static NativeReference<int> numberOfCandidatePairs;
     private static NativeList<int2> candidatePairs;
 
+    private static NativeList<float3> latticeCellPartCorr;
+    private static NativeList<int> cellCollisionOffsets;
+    private static NativeList<int> particleCorrectionOffsets;
+    private static NativeList<int> contactCellIndices;
+    private static NativeList<int> cellBufferPointers;
+    private static NativeList<int> particleBufferPointers;
+
 #endregion
 
 
 #region Main function
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static void RunCollision(
+    public static void BroadPhaseRun(
         float dt,
         float simCellSize,
         ref JobHandle handle,
@@ -682,6 +802,7 @@ public static class FullCollisionJob
 
         
         int numberOfLatticeCells = latticeCells.Length;
+        int numberOfParticles = particles.Length;
         int numberOfBroadphaseCells = broadphaseGridSize.x * broadphaseGridSize.y * broadphaseGridSize.z;
         int prefixChunkSize = (numberOfBroadphaseCells + prefixScanBlockCount - 1) / prefixScanBlockCount;
         numberOfCandidatePairs.Value = 0;
@@ -690,12 +811,13 @@ public static class FullCollisionJob
         latticeCellAABBmin.ResizeUninitialized(numberOfLatticeCells);
         latticeCellAABBspan.ResizeUninitialized(numberOfLatticeCells);
 
-        // -------------------------------------------------
+        // ==========================================
         //                   Step 1
         // For each lattice cell create it's AABB extends,
         // then count the total span and for each sim cell
         // or grid cell that it touches increment it's count
         // at the end prefix sum using a parallel algorithm
+        // ==========================================
 
         CreateLatticeCellsAABB createCellAABB = new CreateLatticeCellsAABB
         {
@@ -741,7 +863,7 @@ public static class FullCollisionJob
         NativeSlice<int> finalChunkCellEndOffsets = new NativeSlice<int>(simCellsEntriesOffset, numberOfBroadphaseCells * (broadphaseWorkerChunkCount-1));
 
 
-        // -------------------------------------------------
+        // ==========================================
         //                   Step 2
         // Scatter the entries based on each sim cell start
         // using the last chunk of the simCellsEntriesOffset
@@ -750,6 +872,7 @@ public static class FullCollisionJob
         // common min corner and if they are in the same body,
         // Last step is to prefix sum to get the total number
         // of candidate pairs and also the per sim cell offset
+        // ==========================================
 
         ScatterAABBentries scatterAABBCells = new ScatterAABBentries
         {
@@ -786,13 +909,20 @@ public static class FullCollisionJob
 
         // Resize the final candidate pairs list
         candidatePairs.ResizeUninitialized(numberOfCandidatePairs.Value);
+        latticeCellPartCorr.ResizeUninitialized(numberOfCandidatePairs.Value * 16); // A pair could write to all cell particles of both cells
+        cellCollisionOffsets.ResizeUninitialized(numberOfLatticeCells);
+        particleCorrectionOffsets.ResizeUninitialized(numberOfParticles);
+        contactCellIndices.ResizeUninitialized(numberOfCandidatePairs.Value * 2);
+        cellBufferPointers.ResizeUninitialized(numberOfCandidatePairs.Value * 2);
+        particleBufferPointers.ResizeUninitialized(numberOfCandidatePairs.Value * 16);
 
 
-        // -------------------------------------------------
+        // ==========================================
         //                   Step 3
         // The last step for broadphase is to use the same
         // algorithm as the sorting part but instead of just
         // counting you actually add the pairs.
+        // ==========================================
 
         AddCandidatePairs addPairs = new AddCandidatePairs
         {
@@ -806,6 +936,18 @@ public static class FullCollisionJob
             candidatePairs = candidatePairs.AsArray()
         };
         handle = addPairs.Schedule(numberOfBroadphaseCells, 1, handle);
+        BuildCollisionMemoryMapJob mapJob = new BuildCollisionMemoryMapJob
+        {
+            latticeCells = latticeCells.AsArray(),
+            candidatePairs = candidatePairs.AsArray(),
+            numberOfParticles = numberOfParticles,
+            cellCollisionOffsets = cellCollisionOffsets.AsArray(),
+            particleCorrectionOffsets = particleCorrectionOffsets.AsArray(),
+            contactCellIndices = contactCellIndices.AsArray(),
+            cellBufferPointers = cellBufferPointers.AsArray(),
+            particleBufferPointers = particleBufferPointers.AsArray()
+        };
+        handle = mapJob.Schedule(handle);
         handle.Complete();
 
         
@@ -875,6 +1017,7 @@ public static class FullCollisionJob
 
         latticeCellAABBmin = new (Allocator.Persistent);
         latticeCellAABBspan = new (Allocator.Persistent);
+        latticeCellPartCorr = new (Allocator.Persistent);
         simCellsEntries = new NativeArray<int>(
             broadphaseWorkerChunkCount * broadphaseGridSize.x * broadphaseGridSize.y * broadphaseGridSize.z,
         Allocator.Persistent);
@@ -886,6 +1029,11 @@ public static class FullCollisionJob
         simCellsNumberOfPairs = new (broadphaseGridSize.x * broadphaseGridSize.y * broadphaseGridSize.z, Allocator.Persistent);
         numberOfCandidatePairs = new (0, Allocator.Persistent);
         candidatePairs = new (Allocator.Persistent);
+        cellCollisionOffsets = new (Allocator.Persistent);
+        particleCorrectionOffsets = new (Allocator.Persistent);
+        contactCellIndices = new (Allocator.Persistent);
+        cellBufferPointers = new (Allocator.Persistent);
+        particleBufferPointers = new (Allocator.Persistent);
     }
 
     public static void Disable()
@@ -895,6 +1043,7 @@ public static class FullCollisionJob
 
         latticeCellAABBmin.Dispose();
         latticeCellAABBspan.Dispose();
+        latticeCellPartCorr.Dispose();
         simCellsEntries.Dispose();
         simCellsEntriesOffset.Dispose();
         prefixChunkSizes.Dispose();
@@ -902,6 +1051,11 @@ public static class FullCollisionJob
         simCellsNumberOfPairs.Dispose();
         numberOfCandidatePairs.Dispose();
         candidatePairs.Dispose();
+        cellCollisionOffsets.Dispose();
+        particleCorrectionOffsets.Dispose();
+        contactCellIndices.Dispose();
+        cellBufferPointers.Dispose();
+        particleBufferPointers.Dispose();
     }
 
 #endregion

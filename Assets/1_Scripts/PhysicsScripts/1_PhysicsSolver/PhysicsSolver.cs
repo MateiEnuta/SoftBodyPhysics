@@ -65,7 +65,7 @@ public class PhysicsSolver : MonoBehaviour
         float bigTetVol = cellVolume * (1f/3f);
         float smallTetsVol = cellVolume * (1f/6f);
 
-        FullCollisionJob.RunCollision(
+        FullCollisionJob.BroadPhaseRun(
                 dt,
                 targetLatticeDimensions,
                 ref handle,
