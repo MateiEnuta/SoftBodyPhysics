@@ -1277,16 +1277,21 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1bf1bc37ab64541faade8b6285a38467, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::PenetrationFreeSpheres
-  substeps: 4
-  velocityIterations: 8
-  positionIterations: 2
-  skin: 0.1
+  substeps: 5
+  velocityIterations: 16
+  positionIterations: 3
+  skin: 0.025
+  closureRounds: 2
+  closureIterations: 4
   gravity: {x: 0, y: -9.81, z: 0}
-  sphereCount: 100
+  sphereCount: 256
   bulletSpeed: 1000
   shootDelay: 99999
   fallbackCount: 0
   minGapEver: 67
+  bodyCount: 0
+  candidatePairs: 0
+  closureUsed: 0
 --- !u!4 &429840017
 Transform:
   m_ObjectHideFlags: 0

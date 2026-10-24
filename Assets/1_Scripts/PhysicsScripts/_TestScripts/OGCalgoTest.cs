@@ -1,22 +1,24 @@
 using System.Collections.Generic;
-using System.Linq;
 using UnityEngine;
 
 /// Minimal demo: spheres + a floor at y = 0, penetration-free by construction.
 ///
 /// Per substep:
+///   0. Broadphase      - spatial hash grid -> short list of candidate pairs (replaces the n^2 loops).
 ///   1. Velocity solve  - speculative, PAIR-RELATIVE contacts. A pair may close its whole gap this substep
 ///                        (never more). Excess approach speed is removed with an equal & opposite impulse
 ///                        (inverse-mass weighted), so momentum is exchanged instead of deleted.
+///                        The pair list is CLOSED afterwards: bodies that received speed during the solve get
+///                        their own pairs added and the solve continues (see closureRounds).
 ///   2. Integrate       - u = h * v  (the displacement every body wants to make this substep)
 ///   3. Displacement bound - for every pair, the relative path must stay outside the spheres (+ a hard skin).
-///                        Violations shrink the pair's RELATIVE displacement, split by inverse mass
-///                        (the pair's centre-of-mass motion is preserved).
-///   4. Fallback        - if the iterations run out, scale ALL displacements by the worst pair's safe fraction.
+///                        Violations are slid along the contact normal. The pair list for this stage is rebuilt
+///                        from the ACTUAL displacements, so the guarantee does not depend on step 1's list.
+///   4. Fallback        - if the iterations run out, cap every body's displacement to its mass-weighted gap share.
 ///   5. v = u / h       - velocity always comes from the motion that actually happened (no velocity wind-up).
 ///
-/// Setup: put this on an empty GameObject, press Play, enable Gizmos in the Game view (or look at the Scene view).
-/// A fast sphere is fired at the pile after `shootDelay` seconds. Right-click the component header for
+/// Setup: put this on an empty GameObject and press Play (URP or Built-in, it picks a shader automatically).
+/// A fast sphere is fired at the pile every `shootDelay` seconds. Right-click the component header for
 /// "Reset Scene" / "Shoot Fast Sphere".
 public class PenetrationFreeSpheres : MonoBehaviour
 {
@@ -25,6 +27,8 @@ public class PenetrationFreeSpheres : MonoBehaviour
     public int velocityIterations = 10;
     public int positionIterations = 8;
     public float skin = 0.01f;                 // gap the velocity solver tries to keep between surfaces
+    public int closureRounds = 8;              // max extra pair-list rounds in the velocity solve (0 = old behaviour)
+    public int closureIterations = 5;          // PGS sweeps per extra round
     public Vector3 gravity = new Vector3(0f, -9.81f, 0f);
 
     [Header("Scene")]
@@ -33,8 +37,11 @@ public class PenetrationFreeSpheres : MonoBehaviour
     public float shootDelay = 4f;
 
     [Header("Debug (read only)")]
-    public int fallbackCount;                  // how often the global fallback had to kick in
-    public float minGapEver = 67;  // smallest surface gap ever seen; stays > 0 if the guarantee holds
+    public int fallbackCount;                  // how often the fallback cap had to kick in
+    public float minGapEver = float.MaxValue;  // smallest surface gap ever seen; stays > 0 if the guarantee holds
+    public int bodyCount;
+    public int candidatePairs;                 // pairs the velocity solver worked on last substep (n^2/2 before)
+    public int closureUsed;                    // extra rounds the last substep needed (0 = nothing new started moving)
 
     class Body
     {
@@ -42,11 +49,41 @@ public class PenetrationFreeSpheres : MonoBehaviour
         public float r, w;        // radius, inverse mass
     }
 
+    struct Pair
+    {
+        public int a, b;          // body indices, a < b
+        public Vector3 n;         // contact normal, from b to a (start-of-substep positions)
+        public float gap;         // surface gap at the start of the substep
+        public float lambda;      // accumulated contact impulse (velocity solve)
+    }
+
+    class PairList
+    {
+        public Pair[] items = new Pair[256];
+        public int count;
+    }
+
     readonly List<Body> bodies = new List<Body>();
-    private Transform[] visualSpheres;
-    float[] lambda = new float[0];   // accumulated contact impulses (pairs, then floor), reset every substep
+    readonly List<Transform> visualSpheres = new List<Transform>();
+    GameObject floorVisual;
+    Shader visualShader;
     float timer;
-    bool fired;
+    float maxRadius;
+
+    // per-substep scratch (grown on demand, never shrunk, so no garbage after warm-up)
+    readonly PairList velPairs = new PairList();   // candidates for the velocity solve
+    readonly PairList posPairs = new PairList();   // candidates for the displacement bound
+    float[] floorLambda = new float[0];
+    float[] reach = new float[0];                  // how far each body can travel this substep
+    float[] moveCap = new float[0];
+
+    // spatial hash grid (counting sort, no per-frame allocations)
+    int[] cellStart = new int[0];                  // bucket b owns cellItems[cellStart[b] .. cellStart[b+1])
+    int[] cellItems = new int[0];
+    int[] cellStamp = new int[0];                  // marks buckets already visited by the current query
+    int[] bodyCell = new int[0];
+    int stampId, hashMask;
+    float invCell;
 
     float HardSkin => skin * 0.5f;   // the position stage never lets surfaces get closer than this
 
@@ -58,7 +95,10 @@ public class PenetrationFreeSpheres : MonoBehaviour
     void ResetScene()
     {
         bodies.Clear();
-        timer = 0f; fired = false; fallbackCount = 0; minGapEver = float.MaxValue;
+        foreach (var t in visualSpheres) Destroy(t.gameObject);
+        visualSpheres.Clear();
+        timer = 0f; fallbackCount = 0; minGapEver = float.MaxValue; maxRadius = 0f;
+
         for (int i = 0; i < sphereCount; i++)
         {
             float r = Random.Range(0.3f, 0.6f);
@@ -75,6 +115,7 @@ public class PenetrationFreeSpheres : MonoBehaviour
     void Add(Vector3 p, Vector3 v, float r)
     {
         bodies.Add(new Body { p = p, v = v, r = r, w = 1f / (r * r * r) });   // mass ~ r^3
+        maxRadius = Mathf.Max(maxRadius, r);
     }
 
     // ------------------------------------------------------------------ simulation
@@ -86,42 +127,49 @@ public class PenetrationFreeSpheres : MonoBehaviour
         float h = Time.fixedDeltaTime / substeps;
         for (int s = 0; s < substeps; s++) Substep(h);
 
-        if (visualSpheres == null) InitializeVisuals();
-        else if (bodies.Count > visualSpheres.Length)
-        {
-            for (int i = 0; i < visualSpheres.Length; i++) Destroy(visualSpheres[i].gameObject);
-            InitializeVisuals();
-        }
-        for (int i = 0; i < bodies.Count; i++)
-        {
-            visualSpheres[i].position = bodies[i].p;
-        }
+        SyncVisuals();
     }
 
     void Substep(float h)
     {
         int n = bodies.Count;
-        if (lambda.Length != n * n + n) lambda = new float[n * n + n];
-        System.Array.Clear(lambda, 0, lambda.Length);
+        bodyCount = n;
+        EnsureCapacity(n);
 
         foreach (var b in bodies) b.v += b.p.normalized * -10f * h;
 
-        // 1) Velocity solve (projected Gauss-Seidel). Positions p are the start-of-substep positions throughout.
-        for (int it = 0; it < velocityIterations; it++)
+        // 0) Broadphase. Positions p stay fixed for the whole velocity solve, so the grid and the pair data
+        //    (normal, gap) are computed ONCE here instead of in every iteration.
+        BuildGrid();
+        for (int i = 0; i < n; i++) reach[i] = bodies[i].v.magnitude * h;
+        BuildPairs(reach, velPairs);
+        candidatePairs = velPairs.count;
+        System.Array.Clear(floorLambda, 0, n);
+
+        // 1) Velocity solve (projected Gauss-Seidel).
+        SolveVelocities(h, velocityIterations);
+
+        // 1b) Close the pair list. The list above was built from the velocities BEFORE the solve, but the solve
+        //     itself hands speed to bodies that were at rest (the wave in a chain / pile). Their pairs are not in
+        //     the list, so without this the wave stops after one hop and stage 2 / 3 have to delete the leftover
+        //     approach speed, which is where the momentum used to disappear (and why a thick skin was needed:
+        //     only 2*skin of margin let the next neighbour into the list).
+        //     A pair can only matter if the two bodies' reach grew by more than the skin margin, so tiny
+        //     speed changes do not trigger anything and a settled pile pays only this O(n) check.
+        closureUsed = 0;
+        for (int round = 0; round < closureRounds; round++)
         {
+            bool grown = false;
             for (int i = 0; i < n; i++)
             {
-                Body a = bodies[i];
-                SolveContact(a, null, Vector3.up, a.p.y - a.r, h, ref lambda[n * n + i]);   // floor
-
-                for (int j = i + 1; j < n; j++)                                              // n^2 "broadphase"
-                {
-                    Body b = bodies[j];
-                    Vector3 d = a.p - b.p;
-                    float dist = d.magnitude;
-                    SolveContact(a, b, d / dist, dist - a.r - b.r, h, ref lambda[i * n + j]);
-                }
+                float r = bodies[i].v.magnitude * h;
+                if (r > reach[i] + 0.5f * skin) { reach[i] = r; grown = true; }
             }
+            if (!grown) break;
+            BuildPairs(reach, velPairs);
+            candidatePairs = velPairs.count;
+            SolveVelocities(h, closureIterations);
+            closureUsed++;
         }
 
         // 2) Integrate + 3/4) bound the displacements
@@ -134,6 +182,25 @@ public class PenetrationFreeSpheres : MonoBehaviour
         foreach (var b in bodies) { b.p += b.u; b.v = b.u / h; }
 
         minGapEver = Mathf.Min(minGapEver, MinGap());
+    }
+
+    void SolveVelocities(float h, int iterations)
+    {
+        int n = bodies.Count;
+        for (int it = 0; it < iterations; it++)
+        {
+            for (int i = 0; i < n; i++)
+            {
+                Body a = bodies[i];
+                SolveContact(a, null, Vector3.up, a.p.y - a.r, h, ref floorLambda[i]);      // floor
+            }
+
+            for (int k = 0; k < velPairs.count; k++)
+            {
+                ref Pair pr = ref velPairs.items[k];
+                SolveContact(bodies[pr.a], bodies[pr.b], pr.n, pr.gap, h, ref pr.lambda);
+            }
+        }
     }
 
     /// One speculative contact between a and b (b == null -> static floor).
@@ -156,114 +223,98 @@ public class PenetrationFreeSpheres : MonoBehaviour
     {
         int n = bodies.Count;
 
-        // Run a few iterations just to iron out the deflections. 
-        // NO global fallback. NO freezing. Just sliding.
+        // Pairs that are NOT in this list satisfy gap >= |u_a| + |u_b| + 2*skin, so even if they moved straight
+        // at each other they could not get closer than the hard skin. Both stages below only ever shrink |u|,
+        // so that stays true and these pairs can be ignored without weakening the guarantee.
+        for (int i = 0; i < n; i++) reach[i] = bodies[i].u.magnitude;
+        BuildPairs(reach, posPairs);
+
+
+        // Run a few iterations just to iron out the deflections.
         for (int it = 0; it < positionIterations; it++)
         {
             bool violated = false;
-            
+
+            // Floor sliding
             for (int i = 0; i < n; i++)
             {
                 Body a = bodies[i];
-                
-                // Floor sliding
                 float drop = Mathf.Max(a.p.y - a.r - HardSkin, 0f);
                 if (a.u.y < -drop) { a.u.y = -drop; violated = true; }
-
-                for (int j = i + 1; j < n; j++)
-                {
-                    Body b = bodies[j];
-                    
-                    // When do they hit?
-                    float s = SafeFraction(a.p - b.p, a.u - b.u, a.r + b.r + HardSkin);
-                    if (s >= 1f) continue;
-                    
-                    violated = true; // We found a crash, meaning we might need another iteration
-
-                    // 1. Safe movement up to impact
-                    Vector3 safeU_A = a.u * s;
-                    Vector3 safeU_B = b.u * s;
-                    
-                    // 2. Remaining movement
-                    Vector3 remA = a.u * (1f - s);
-                    Vector3 remB = b.u * (1f - s);
-                    
-                    // 3. Normal points from B to A
-                    Vector3 impactPosA = a.p + safeU_A;
-                    Vector3 impactPosB = b.p + safeU_B;
-                    Vector3 normal = (impactPosA - impactPosB).normalized;
-                    
-                    // 4. Slide Particle A (If it pushes AGAINST the normal, it's penetrating B)
-                    float pushA = Vector3.Dot(remA, normal);
-                    if (pushA < 0f) 
-                    {
-                        remA -= pushA * normal; 
-                    }
-
-                    // 5. Slide Particle B (If it pushes ALONG the normal, it's penetrating A)
-                    float pushB = Vector3.Dot(remB, normal);
-                    if (pushB > 0f) 
-                    {
-                        remB -= pushB * normal; 
-                    }
-                    
-                    // 6. Apply to BOTH
-                    a.u = safeU_A + remA;
-                    b.u = safeU_B + remB;
-                }
             }
-            
-            // If we made it through all particles and nobody crashed, we can exit early!
-            if (!violated) return; 
+
+            for (int k = 0; k < posPairs.count; k++)
+            {
+                Pair pr = posPairs.items[k];
+                Body a = bodies[pr.a];
+                Body b = bodies[pr.b];
+
+                // When do they hit?
+                float s = SafeFraction(a.p - b.p, a.u - b.u, a.r + b.r + HardSkin);
+                if (s >= 1f) continue;
+
+                violated = true; // We found a crash, meaning we might need another iteration
+
+                // 1. Safe movement up to impact
+                Vector3 safeU_A = a.u * s;
+                Vector3 safeU_B = b.u * s;
+
+                // 2. Remaining movement
+                Vector3 remA = a.u * (1f - s);
+                Vector3 remB = b.u * (1f - s);
+
+                // 3. Normal points from B to A
+                Vector3 impactPosA = a.p + safeU_A;
+                Vector3 impactPosB = b.p + safeU_B;
+                Vector3 normal = (impactPosA - impactPosB).normalized;
+
+                // 4. Slide Particle A (If it pushes AGAINST the normal, it's penetrating B)
+                float pushA = Vector3.Dot(remA, normal);
+                if (pushA < 0f) remA -= pushA * normal;
+
+                // 5. Slide Particle B (If it pushes ALONG the normal, it's penetrating A)
+                float pushB = Vector3.Dot(remB, normal);
+                if (pushB > 0f) remB -= pushB * normal;
+
+                // 6. Apply to BOTH
+                a.u = safeU_A + remA;
+                b.u = safeU_B + remB;
+            }
+
+            // If we made it through all pairs and nobody crashed, we can exit early!
+            if (!violated) return;
         }
 
+        // Planar truncation: non-iterative, order-independent, only limits motion TOWARD a neighbour.
+        // TO TEST!!
+        // I've changed - HardSkin ti + HardSkin to get a little bit more slack in.
         for (int i = 0; i < n; i++)
         {
             Body a = bodies[i];
-            
-            // 1. Find the absolute smallest safe sphere around this particle
-            float maxAllowedMove = float.MaxValue;
-            
-            // Floor gap (w = 0, so particle A gets 100% of the gap)
-            float floorGap = (a.p.y - a.r);
-            maxAllowedMove = Mathf.Min(maxAllowedMove, Mathf.Max(floorGap, 0f));
-
-            for (int j = 0; j < n; j++)
-            {
-                if (i == j) continue;
-                
-                Body b = bodies[j];
-                
-                // Measure distance using CURRENT positions, not predicted
-                float dist = Vector3.Distance(a.p, b.p);
-                float gap = dist - a.r - b.r;
-                
-                // Clamp negative gaps to 0 (if they are already touching, safe sphere is 0)
-                float safeGap = Mathf.Max(gap, 0f);
-                
-                float wSum = a.w + b.w;
-                if (wSum > 0f)
-                {
-                    // OGC Rule: Share the gap based on inverse mass
-                    float allowedShare = safeGap * (a.w / wSum);
-                    
-                    if (allowedShare < maxAllowedMove)
-                    {
-                        maxAllowedMove = allowedShare;
-                    }
-                }
-            }
-            
-            // 2. Limit the displacement by modifying ONLY its magnitude
-            float u_mag = a.u.magnitude;
-            if (u_mag > maxAllowedMove)
-            {
-                // Preserve the original direction, but cap the speed
-                a.u = (a.u / u_mag) * maxAllowedMove;
-            }
+            moveCap[i] = 1f;                                      // per-body scale t_i
+            float room = Mathf.Max(a.p.y - a.r + HardSkin, 0f);   // floor
+            float down = -a.u.y;
+            if (down > room) moveCap[i] = room / down;
         }
-    }
 
+        for (int k = 0; k < posPairs.count; k++)
+        {
+            Pair pr = posPairs.items[k];                          // n points from b to a, gap at start of substep
+            Body a = bodies[pr.a], b = bodies[pr.b];
+
+            float room = Mathf.Max(pr.gap + HardSkin, 0f);        // space between the two surfaces
+            float da = Mathf.Max(-Vector3.Dot(a.u, pr.n), 0f);    // a moving toward b
+            float db = Mathf.Max( Vector3.Dot(b.u, pr.n), 0f);    // b moving toward a
+            if (da + db <= room) continue;                        // can't close the gap: no limit at all
+
+            float roomA = room * da / (da + db);                  // split by approach, not by mass
+            float roomB = room * db / (da + db);
+            if (da > roomA) moveCap[pr.a] = Mathf.Min(moveCap[pr.a], roomA / da);
+            if (db > roomB) moveCap[pr.b] = Mathf.Min(moveCap[pr.b], roomB / db);
+        }
+
+        for (int i = 0; i < n; i++) bodies[i].u *= moveCap[i];
+    }
 
     /// Largest t in [0,1] such that |d0 + t*delta| stays >= R (d0 = centre offset, delta = relative displacement).
     /// Sliding past each other is allowed; only the part of the motion that would enter the sphere is cut.
@@ -280,68 +331,175 @@ public class PenetrationFreeSpheres : MonoBehaviour
         return t >= 1f ? 1f : Mathf.Max(t, 0f);
     }
 
+    /// Debug only. Looks at the floor and at the pairs from the last bound stage; every other pair was at least
+    /// 2*skin apart before the move and could not close that gap, so it can't be the minimum.
     float MinGap()
     {
         float m = float.MaxValue;
         for (int i = 0; i < bodies.Count; i++)
+            m = Mathf.Min(m, bodies[i].p.y - bodies[i].r);
+
+        for (int k = 0; k < posPairs.count; k++)
         {
-            Body a = bodies[i];
-            m = Mathf.Min(m, a.p.y - a.r);
-            for (int j = i + 1; j < bodies.Count; j++)
-                m = Mathf.Min(m, Vector3.Distance(a.p, bodies[j].p) - a.r - bodies[j].r);
+            Body a = bodies[posPairs.items[k].a];
+            Body b = bodies[posPairs.items[k].b];
+            m = Mathf.Min(m, Vector3.Distance(a.p, b.p) - a.r - b.r);
         }
         return m;
     }
 
+    // ------------------------------------------------------------------ broadphase
+
+    void EnsureCapacity(int n)
+    {
+        if (reach.Length >= n) return;
+        int size = Mathf.Max(n, reach.Length * 2);
+        reach = new float[size];
+        moveCap = new float[size];
+        floorLambda = new float[size];
+    }
+
+    int CellHash(int x, int y, int z)
+    {
+        unchecked { return ((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) & hashMask; }
+    }
+
+    /// Spatial hash of the body centres (cell size = largest diameter). Counting sort: O(n), no allocations.
+    void BuildGrid()
+    {
+        int n = bodies.Count;
+
+        int size = 64;
+        while (size < n * 2) size <<= 1;
+        hashMask = size - 1;
+        if (cellStart.Length != size + 1)
+        {
+            cellStart = new int[size + 1];
+            cellStamp = new int[size];
+            stampId = 0;
+        }
+        if (bodyCell.Length < n)
+        {
+            bodyCell = new int[n * 2];
+            cellItems = new int[n * 2];
+        }
+
+        invCell = 1f / Mathf.Max(2f * maxRadius, 0.01f);
+        System.Array.Clear(cellStart, 0, cellStart.Length);
+
+        for (int i = 0; i < n; i++)
+        {
+            Vector3 p = bodies[i].p;
+            int c = CellHash(Mathf.FloorToInt(p.x * invCell), Mathf.FloorToInt(p.y * invCell), Mathf.FloorToInt(p.z * invCell));
+            bodyCell[i] = c;
+            cellStart[c]++;
+        }
+        for (int c = 1; c < size; c++) cellStart[c] += cellStart[c - 1];      // inclusive prefix sum = bucket ends
+        cellStart[size] = n;
+        for (int i = n - 1; i >= 0; i--) cellItems[--cellStart[bodyCell[i]]] = i;   // bucket starts
+    }
+
+    /// Fills `list` with every pair that could interact this substep: gap < reach_a + reach_b + 2*skin.
+    /// `reach[i]` is how far body i can move (velocity * h for the velocity solve, |u| for the bound stage).
+    void BuildPairs(float[] reachOf, PairList list)
+    {
+        int n = bodies.Count;
+        list.count = 0;
+
+        float reachMax = 0f;
+        for (int i = 0; i < n; i++) reachMax = Mathf.Max(reachMax, reachOf[i]);
+        float rhoMax = maxRadius + reachMax + skin;            // largest "inflated radius" of any body
+
+        for (int i = 0; i < n; i++)
+        {
+            Body a = bodies[i];
+            float q = (a.r + reachOf[i] + skin) + rhoMax;      // any partner's centre is within q of ours
+
+            int x0 = Mathf.FloorToInt((a.p.x - q) * invCell), x1 = Mathf.FloorToInt((a.p.x + q) * invCell);
+            int y0 = Mathf.FloorToInt((a.p.y - q) * invCell), y1 = Mathf.FloorToInt((a.p.y + q) * invCell);
+            int z0 = Mathf.FloorToInt((a.p.z - q) * invCell), z1 = Mathf.FloorToInt((a.p.z + q) * invCell);
+
+            long cells = (long)(x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1);
+            if (cells > n)
+            {
+                // Absurdly fast body: scanning the grid would cost more than just testing everybody.
+                for (int j = i + 1; j < n; j++) TryAddPair(i, j, reachOf, list);
+                continue;
+            }
+
+            stampId++;
+            for (int x = x0; x <= x1; x++)
+            for (int y = y0; y <= y1; y++)
+            for (int z = z0; z <= z1; z++)
+            {
+                int c = CellHash(x, y, z);
+                if (cellStamp[c] == stampId) continue;         // hash collision: bucket already scanned
+                cellStamp[c] = stampId;
+
+                for (int k = cellStart[c]; k < cellStart[c + 1]; k++)
+                {
+                    int j = cellItems[k];
+                    if (j > i) TryAddPair(i, j, reachOf, list);   // j > i: every pair is found once
+                }
+            }
+        }
+    }
+
+    void TryAddPair(int i, int j, float[] reachOf, PairList list)
+    {
+        Body a = bodies[i], b = bodies[j];
+        Vector3 d = a.p - b.p;
+        float dist = d.magnitude;
+        float gap = dist - a.r - b.r;
+        if (gap >= reachOf[i] + reachOf[j] + 2f * skin) return;
+
+        if (list.count == list.items.Length) System.Array.Resize(ref list.items, list.count * 2);
+        list.items[list.count++] = new Pair
+        {
+            a = i, b = j,
+            n = dist > 1e-6f ? d / dist : Vector3.up,
+            gap = gap,
+            lambda = 0f
+        };
+    }
+
     // ------------------------------------------------------------------ drawing
 
-    private void InitializeVisuals()
+    void InitializeVisuals()
     {
-        // 1. Find the URP Lit Shader
-        Shader urpLitShader = Shader.Find("Universal Render Pipeline/Lit");
-        if (urpLitShader == null)
-        {
-            Debug.LogError("URP Lit shader not found! Make sure URP is installed and active.");
-            return;
-        }
+        visualShader = Shader.Find("Universal Render Pipeline/Lit");
+        if (visualShader == null) visualShader = Shader.Find("Standard");
 
-        // 2. Create the Floor
-        GameObject floor = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        floor.transform.position = new Vector3(0f, -0.05f, 0f);
-        floor.transform.localScale = new Vector3(40f, 0.1f, 40f);
-        
-        Material floorMat = new Material(urpLitShader);
-        floorMat.SetColor("_BaseColor", new Color(0.25f, 0.25f, 0.25f));
-        floor.GetComponent<Renderer>().material = floorMat;
-        
+        floorVisual = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        floorVisual.transform.position = new Vector3(0f, -0.05f, 0f);
+        floorVisual.transform.localScale = new Vector3(40f, 0.1f, 40f);
+        floorVisual.GetComponent<Renderer>().material = new Material(visualShader) { color = new Color(0.25f, 0.25f, 0.25f) };
+
         // Remove floor collider so it doesn't interfere with your custom physics
-        Destroy(floor.GetComponent<Collider>());
+        Destroy(floorVisual.GetComponent<Collider>());
+    }
 
-        // 3. Create the Spheres
-        visualSpheres = new Transform[bodies.Count];
-        
-        for (int i = 0; i < bodies.Count; i++)
-        {
-            GameObject sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            
-            // CRITICAL: Unity scale is diameter, so we multiply radius by 2
-            sphere.transform.localScale = Vector3.one * (bodies[i].r * 2f);
-            
-            // Remove the Unity collider to keep it purely visual
-            Destroy(sphere.GetComponent<Collider>());
+    void AddVisual(Body body)
+    {
+        GameObject sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
 
-            // Apply your mass-based coloring
-            Color bodyColor = Color.HSVToRGB(Mathf.Repeat(bodies[i].r * 3f, 1f), 0.6f, 1f);
-            
-            Material mat = new Material(urpLitShader);
-            mat.SetColor("_BaseColor", bodyColor);
-            
-            // URP uses _Smoothness instead of _Glossiness
-            mat.SetFloat("_Smoothness", 0.5f); 
-            
-            sphere.GetComponent<Renderer>().material = mat;
-            
-            visualSpheres[i] = sphere.transform;
-        }
+        // CRITICAL: Unity scale is diameter, so we multiply radius by 2
+        sphere.transform.localScale = Vector3.one * (body.r * 2f);
+        Destroy(sphere.GetComponent<Collider>());
+
+        var mat = new Material(visualShader) { color = Color.HSVToRGB(Mathf.Repeat(body.r * 3f, 1f), 0.6f, 1f) };
+        if (mat.HasProperty("_Smoothness")) mat.SetFloat("_Smoothness", 0.5f);
+        sphere.GetComponent<Renderer>().material = mat;
+
+        visualSpheres.Add(sphere.transform);
+    }
+
+    /// Creates visuals only for NEW bodies (the old version destroyed and rebuilt everything, plus a new floor,
+    /// every time a bullet was added).
+    void SyncVisuals()
+    {
+        if (floorVisual == null) InitializeVisuals();
+        while (visualSpheres.Count < bodies.Count) AddVisual(bodies[visualSpheres.Count]);
+        for (int i = 0; i < bodies.Count; i++) visualSpheres[i].position = bodies[i].p;
     }
 }
