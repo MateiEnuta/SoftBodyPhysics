@@ -30,9 +30,10 @@ public class PhysicsSolver : MonoBehaviour
 
     // --------------Cell data--------------
     private NativeList<LatticeCell> latticeCells;
-    private NativeList<uint2>       latticeCellLatticeCoords;
     private NativeList<int>         latticeCellBodyRef;
-    private List<int>               latticeColReferences;
+    private NativeList<int>         activeCollCellBodyRef;
+    private NativeList<int>         latticeColReferences;
+    private NativeList<int>         activeCollisionLattices;
     private List<int>               latticeVisReferences;
     private int[]                   globalChlCount;
 
@@ -65,18 +66,21 @@ public class PhysicsSolver : MonoBehaviour
         float bigTetVol = cellVolume * (1f/3f);
         float smallTetsVol = cellVolume * (1f/6f);
 
-        FullCollisionJob.BroadPhaseRun(
-                dt,
-                targetLatticeDimensions,
-                ref handle,
-                particles,
-                latticeCells,
-                latticeCellLatticeCoords,
-                collisionVertices,
-                collisionTriangles,
-                collisionEdges,
-                collisionWrapers
-            );
+        FullCollisionJob.RunCollision(
+            targetLatticeDimensions,
+            0.025f,
+            4,
+            ref handle,
+            particles,
+            latticeCells,
+            activeCollisionLattices,
+            activeCollCellBodyRef,
+            latticeColReferences,
+            collisionVertices,
+            collisionTriangles,
+            collisionEdges,
+            collisionWrapers
+        );
 
         // for (int i = 0; i < substeps; i++)
         // {
@@ -235,8 +239,7 @@ public class PhysicsSolver : MonoBehaviour
             int writeStart = insertionPos + existingCount;
             latticeCells.InsertRange(writeStart, addCount);
             latticeCellBodyRef.InsertRange(writeStart, addCount);
-            latticeCellLatticeCoords.InsertRange(writeStart, addCount);
-            latticeColReferences.InsertRange(writeStart, Enumerable.Repeat(-1, addCount));
+            latticeColReferences.InsertRange(writeStart, addCount);
             latticeVisReferences.InsertRange(writeStart, Enumerable.Repeat(-1, addCount));
 
             for (int i = 0; i < addCount; i++)
@@ -254,11 +257,10 @@ public class PhysicsSolver : MonoBehaviour
 
                 latticeCells[writeStart + i] = newCell;
                 latticeCellBodyRef[writeStart + i] = bodyWrapers.Count;
-                latticeCellLatticeCoords[writeStart + i] = new uint2((uint)bodyWrapers.Count, 
-                    FullCollisionJob.PackSpanUint(currentProcess.to3D(currentProcess.latticeCellCoords[currentLatticeCell]) + new int3(1))
-                );
-                if (currentProcess.cellToColCell[currentLatticeCell] != -1)
-                    latticeColReferences[writeStart + i] = currentProcess.cellToColCell[currentLatticeCell] + initialColWraperCount;
+                // NativeList.InsertRange leaves the slots uninitialised, so -1 is written explicitly
+                latticeColReferences[writeStart + i] = currentProcess.cellToColCell[currentLatticeCell] != -1
+                    ? currentProcess.cellToColCell[currentLatticeCell] + initialColWraperCount
+                    : -1;
                 if (currentProcess.cellToVisCell[currentLatticeCell] != -1)
                     latticeVisReferences[writeStart + i] = currentProcess.cellToVisCell[currentLatticeCell] + initialVisWrapersCount;
                 // Increment the pre processor lattice index
@@ -326,12 +328,18 @@ public class PhysicsSolver : MonoBehaviour
 
     private void UpdateCellVertReferences()
     {
+        activeCollisionLattices.Clear();
+        activeCollCellBodyRef.Clear();
         for (int i = 0; i < latticeCells.Length; i++)
         {
             if (latticeColReferences[i] != -1) {
                 CollisionWraper wraperCopy = collisionWrapers[latticeColReferences[i]];
                 wraperCopy.cellIdx = i;
                 collisionWrapers[latticeColReferences[i]] = wraperCopy;
+
+                // Mark the current cell as having a collision mesh
+                activeCollisionLattices.Add(i);
+                activeCollCellBodyRef.Add(latticeCellBodyRef[i]);
             }
             if (latticeVisReferences[i] != -1) 
             {
@@ -362,10 +370,11 @@ public class PhysicsSolver : MonoBehaviour
         // Cell data allocation
         latticeCells = new NativeList<LatticeCell>(Allocator.Persistent);
         latticeCellBodyRef = new NativeList<int>(Allocator.Persistent);
-        latticeCellLatticeCoords = new NativeList<uint2>(Allocator.Persistent);
+        activeCollCellBodyRef = new NativeList<int>(Allocator.Persistent);
         globalChlCount = new int[8];
         for (int i = 0; i < 8; i++) globalChlCount[i] = 0;
-        latticeColReferences = new List<int>();
+        latticeColReferences = new NativeList<int>(Allocator.Persistent);
+        activeCollisionLattices = new NativeList<int>(Allocator.Persistent);
         latticeVisReferences = new List<int>();
 
         // Collision data allocation
@@ -392,7 +401,9 @@ public class PhysicsSolver : MonoBehaviour
         particles.Dispose();
         latticeCells.Dispose();
         latticeCellBodyRef.Dispose();
-        latticeCellLatticeCoords.Dispose();
+        activeCollCellBodyRef.Dispose();
+        latticeColReferences.Dispose();
+        activeCollisionLattices.Dispose();
         collisionVertices.Dispose();
         collisionTriangles.Dispose();
         collisionEdges.Dispose();
