@@ -15,6 +15,7 @@ Pipeline:
     Broad phase   swept cell boxes -> wrapped grid -> candidate cell pairs
     Narrow phase  collision vertex positions -> one (normal, gap) per pair
     Stage 1       speculative velocity contacts (momentum exchange)
+    Stage 2       slide along the contact planes, the lighter side gives way
     Stage 3       hard planar Divide-and-Truncate (no penetration)
 
 Positions:
@@ -765,43 +766,43 @@ public struct LatticeCellsVelTransfer : IJob
 }
 
 /*
-Stage 3: hard planar Divide-and-Truncate (DAT), no penetration.
+Stage 2: slide, gives the excess motion to the lighter side before stage 3 cuts it.
 
-Must be the last thing that moves particles in a substep. The motion of every
-node, d = current - previous, is only ever scaled toward the start:
+Every pair has a plane fixed at the start of the substep, the same one stage 3
+uses: n from the narrow phase (B to A) and slab, the gap along n between A's
+lowest collision vertex and B's highest. The cheap test takes the node of each
+side that approaches most, a side that moves away gives extra room:
 
-    current = previous + alpha d,    alpha in [0, 1], one per particle
+    excess = approachA + approachB - max(slab - hardSkin, 0)
 
-For every pair, n from the narrow phase (B to A):
-    slab      min of n.x over A's collision verts - max over B's, at the
-              start of the substep. A lower bound on the distance for any
-              unit n, a poor n only gives less room
-    room      max(slab - hardSkin, 0)
-    approach  how far a node moves toward the other side, -n.d for A's
-              nodes and n.d for B's
+excess > 0 only says the pair might get too close. Stretched cells make it true
+for almost every pair in a crushed pile, and acting on those pairs stretches the
+cells further, so a pair is skipped when
 
-If the largest approach of A plus the largest of B fits in the room, the pair
-is safe. Otherwise the room is split in proportion to the two approaches and
-every node approaching more than its side's share gets
+    the meshes cannot meet     gap - hardSkin > largest node motion of A + of B
+    its vertices end apart     deficit = hardSkin - (A's lowest end - B's highest
+                               end, along n) <= 0
 
-    alpha = min(alpha, share / approach)
+A real deficit is split by cell inverse mass, so the lighter side gives way.
+Vertices past their side's share are lifted to it along n through their tet's
+nodes, sideways motion is untouched.
 
-Floor (temporary, for testing): the same with n = up, slab = lowest
-collision vertex - floorY, the whole room goes to the cell.
+A start slab below hardSkin leaves nothing to measure the end against. Those
+pairs only stop the approach: excess is split the same way and every node over
+its side's limit moves back to it, a limit below 0 pushes a light side away.
 
-Why it holds:
-    - A collision vertex is a weighted average of its tet's nodes (weights
-      >= 0, sum 1), so it approaches the plane at most its side's share and
-      the pair ends at least hardSkin apart along n.
-    - The min only scales motions toward zero, which never makes a node
-      approach any plane more than that plane allowed. The order of the
-      pairs does not matter and every pair holds at once.
+Floor (temporary, for testing): vertices ending below min(start gap, hardSkin)
+are lifted to it.
 
-Only pairs inside candidatePairs are protected.
+A move can start another violation, so everything repeats until a whole pass
+finds none or the passes run out. Stage 3 handles the rest.
 */
 [BurstCompile]
-public struct LatticeCellsPositionLimit : IJob
+public struct LatticeCellsSlide : IJob
 {
+    private const int SlidePasses = 4;
+    private const float Tolerance = 1e-5f;
+
     public float hardSkin;
     public float floorY;
 
@@ -813,16 +814,15 @@ public struct LatticeCellsPositionLimit : IJob
     [ReadOnly] public NativeList<int> latticeColReferences;
     [ReadOnly] public NativeList<CollisionWraper> collisionWrapers;
     [ReadOnly] public NativeArray<float3> colVertPrevPositions;
+    [ReadOnly] public NativeList<DynamicVertex> collisionVertices;
 
     public NativeList<Particle> particles;
 
 
     public void Execute()
     {
-        NativeArray<float> alpha = new NativeArray<float>(particles.Length, Allocator.Temp);
-        for (int i = 0; i < alpha.Length; i++) alpha[i] = 1f;
-
-        // Pair caps
+        // Pair planes, (n, slab at the start of the substep)
+        NativeArray<float4> planes = new NativeArray<float4>(candidatePairs.Length, Allocator.Temp);
         for (int i = 0; i < candidatePairs.Length; i++)
         {
             int2 pair = candidatePairs[i];
@@ -845,36 +845,327 @@ public struct LatticeCellsPositionLimit : IJob
             float maxB = float.MinValue;
             for (int v = wraperB.colVertsRange.x; v < wraperB.colVertsRange.y; v++)
                 maxB = math.max(maxB, math.dot(n, colVertPrevPositions[v]));
-            float room = math.max(minA - maxB - hardSkin, 0f);
 
-            float approachA = 0f;
-            float approachB = 0f;
-            for (int k = 0; k < 8; k++)
-            {
-                approachA = math.max(approachA, -math.dot(n, NodeDisplacement(A, k)));
-                approachB = math.max(approachB, math.dot(n, NodeDisplacement(B, k)));
-            }
-            if (approachA + approachB <= room) continue;
-
-            float shareA = room * approachA / (approachA + approachB);
-            float shareB = room - shareA;
-            CapCell(alpha, A, -n, shareA);
-            CapCell(alpha, B, n, shareB);
+            planes[i] = new float4(n, minA - maxB);
         }
 
-        // Floor caps
-        for (int a = 0; a < activeCollisionLattices.Length; a++)
+        // Floor rooms
+        NativeArray<float> floorRooms = new NativeArray<float>(activeCollisionLattices.Length, Allocator.Temp);
+        for (int a = 0; a < floorRooms.Length; a++)
         {
-            int cellIdx = activeCollisionLattices[a];
-            LatticeCell cell = latticeCells[cellIdx];
-
-            CollisionWraper wraper = collisionWrapers[latticeColReferences[cellIdx]];
+            CollisionWraper wraper = collisionWrapers[latticeColReferences[activeCollisionLattices[a]]];
             float lowestY = float.MaxValue;
             for (int v = wraper.colVertsRange.x; v < wraper.colVertsRange.y; v++)
                 lowestY = math.min(lowestY, colVertPrevPositions[v].y);
-            float room = math.max(lowestY - floorY - hardSkin, 0f);
+            floorRooms[a] = lowestY - floorY;
+        }
 
-            CapCell(alpha, cell, new float3(0f, -1f, 0f), room);
+        bool violated = true;
+        for (int pass = 0; pass < SlidePasses && violated; pass++)
+        {
+            violated = false;
+
+            // Floor
+            for (int a = 0; a < floorRooms.Length; a++)
+            {
+                int cellIdx = activeCollisionLattices[a];
+                float target = floorY + math.min(floorRooms[a], hardSkin);
+                if (RaiseVerts(latticeCells[cellIdx], collisionWrapers[latticeColReferences[cellIdx]], new float3(0f, 1f, 0f), target)) violated = true;
+            }
+
+            // Pairs
+            for (int i = 0; i < candidatePairs.Length; i++)
+            {
+                float3 n = planes[i].xyz;
+                float slab = planes[i].w;
+                float room = math.max(slab - hardSkin, 0f);
+                LatticeCell A = latticeCells[candidatePairs[i].x];
+                LatticeCell B = latticeCells[candidatePairs[i].y];
+
+                float approachA = MaxApproach(A, -n);
+                float approachB = MaxApproach(B, n);
+                float excess = approachA + approachB - room;
+                if (excess <= Tolerance) continue;
+
+                // The worst node against the start slab only says it might touch, the rest looks at the real end
+                if (pairContacts[i].w - hardSkin > MaxMove(A) + MaxMove(B)) continue;
+
+                float wA = CellInvMass(A);
+                float wB = CellInvMass(B);
+                if (wA + wB <= 0f) continue;
+
+                if (slab < hardSkin)
+                {
+                    // The plane has no room to measure against, only stop the approach
+                    violated = true;
+                    LimitNodes(A, -n, approachA - excess * wA / (wA + wB));
+                    LimitNodes(B, n, approachB - excess * wB / (wA + wB));
+                    continue;
+                }
+
+                CollisionWraper wraperA = collisionWrapers[latticeColReferences[candidatePairs[i].x]];
+                CollisionWraper wraperB = collisionWrapers[latticeColReferences[candidatePairs[i].y]];
+                float endA = LowestVert(A, wraperA, n);
+                float endB = -LowestVert(B, wraperB, -n);
+                float deficit = hardSkin - (endA - endB);
+                if (deficit <= Tolerance) continue;
+
+                violated = true;
+                RaiseVerts(A, wraperA, n, endA + deficit * wA / (wA + wB));
+                RaiseVerts(B, wraperB, -n, -endB + deficit * wB / (wA + wB));
+            }
+        }
+
+        planes.Dispose();
+        floorRooms.Dispose();
+    }
+
+    // Every free node of the cell moving along dir by more than limit moves back to it
+    private void LimitNodes(in LatticeCell c, float3 dir, float limit)
+    {
+        for (int k = 0; k < 8; k++)
+        {
+            int idx = FullCollisionJob.CellNode(c, k);
+            Particle p = particles[idx];
+            if (p.invMass <= 0f) continue;
+
+            float over = math.dot(dir, p.currentPosition - p.previousPosition) - limit;
+            if (over <= 0f) continue;
+
+            p.currentPosition -= dir * over;
+            particles[idx] = p;
+        }
+    }
+
+    // 1 / (sum of node masses), 0 when a node is pinned so that side does not give way
+    private float CellInvMass(in LatticeCell c)
+    {
+        float mass = 0f;
+        for (int k = 0; k < 8; k++)
+        {
+            float w = particles[FullCollisionJob.CellNode(c, k)].invMass;
+            if (w <= 0f) return 0f;
+            mass += 1f / w;
+        }
+        return 1f / mass;
+    }
+
+    // Every collision vertex of the cell below target along dir is lifted to it, through its tet's nodes. True when one moved
+    private bool RaiseVerts(in LatticeCell c, in CollisionWraper wraper, float3 dir, float target)
+    {
+        bool moved = false;
+        for (int v = wraper.colVertsRange.x; v < wraper.colVertsRange.y; v++)
+        {
+            DynamicVertex vertex = collisionVertices[v];
+            int4 tet = FullCollisionJob.CellTet(vertex.tet);
+
+            float3 end = 0f;
+            float invMassSum = 0f;
+            for (int k = 0; k < 4; k++)
+            {
+                Particle p = particles[FullCollisionJob.CellNode(c, tet[k])];
+                end += vertex.bary[k] * p.currentPosition;
+                invMassSum += vertex.bary[k] * vertex.bary[k] * p.invMass;
+            }
+
+            float missing = target - math.dot(dir, end);
+            if (missing <= Tolerance || invMassSum <= 0f) continue;
+
+            for (int k = 0; k < 4; k++)
+            {
+                int idx = FullCollisionJob.CellNode(c, tet[k]);
+                Particle p = particles[idx];
+                p.currentPosition += dir * (p.invMass * vertex.bary[k] * missing / invMassSum);
+                particles[idx] = p;
+            }
+            moved = true;
+        }
+        return moved;
+    }
+
+    // The lowest of the cell's collision vertices along dir, where they really end this substep
+    private float LowestVert(in LatticeCell c, in CollisionWraper wraper, float3 dir)
+    {
+        float lowest = float.MaxValue;
+        for (int v = wraper.colVertsRange.x; v < wraper.colVertsRange.y; v++)
+        {
+            DynamicVertex vertex = collisionVertices[v];
+            int4 tet = FullCollisionJob.CellTet(vertex.tet);
+            float3 end = 0f;
+            for (int k = 0; k < 4; k++)
+                end += vertex.bary[k] * particles[FullCollisionJob.CellNode(c, tet[k])].currentPosition;
+            lowest = math.min(lowest, math.dot(dir, end));
+        }
+        return lowest;
+    }
+
+    // The largest distance any node of the cell moves this substep
+    private float MaxMove(in LatticeCell c)
+    {
+        float most = 0f;
+        for (int k = 0; k < 8; k++)
+        {
+            Particle p = particles[FullCollisionJob.CellNode(c, k)];
+            most = math.max(most, math.length(p.currentPosition - p.previousPosition));
+        }
+        return most;
+    }
+
+    // The most any node of the cell moves along dir, negative when all move away
+    private float MaxApproach(in LatticeCell c, float3 dir)
+    {
+        float most = float.MinValue;
+        for (int k = 0; k < 8; k++)
+        {
+            Particle p = particles[FullCollisionJob.CellNode(c, k)];
+            most = math.max(most, math.dot(dir, p.currentPosition - p.previousPosition));
+        }
+        return most;
+    }
+
+    private float3 CellPrevCenter(in LatticeCell c)
+    {
+        float3 s = new float3(0);
+        for (int k = 0; k < 8; k++)
+            s += particles[FullCollisionJob.CellNode(c, k)].previousPosition;
+        return s * 0.125f;
+    }
+}
+
+/*
+Stage 3: hard planar Divide-and-Truncate (DAT), no penetration.
+
+Must be the last thing that moves particles in a substep. The motion of every
+node, d = current - previous, is only ever scaled toward the start:
+
+    current = previous + alpha d,    alpha in [0, 1], one per particle
+
+For every pair, n from the narrow phase (B to A):
+    slab      min of n.x over A's collision verts - max over B's, at the
+              start of the substep. A lower bound on the distance for any
+              unit n, a poor n only gives less room
+    room      max(slab - hardSkin, 0)
+    approach  the most any node of a side moves toward the other side, -n.d for
+              A's nodes and n.d for B's. Negative when the whole side moves away
+
+Only relative motion counts: a side that moves away gives that motion as extra
+room, so two bodies moving together are never limited. If the approaching sides
+fit in the room, the pair is safe. Otherwise the room is split in proportion to
+the two approaches and every node taking more than its side's share gets
+
+    alpha = min(alpha, share / approach)
+
+The approach test is only a bound, stretched cells fail it without being close.
+Before capping, a pair is left alone if the meshes cannot meet or its collision
+vertices really end hardSkin apart along n with the current alphas (the same
+two tests as stage 2, for a start slab of at least hardSkin).
+
+Capping a node can take away a retreat or move a vertex another pair was relying
+on, so the pairs repeat until nothing changes. If the passes run out, a last pass
+ignores retreats and the real end: its caps hold whatever else happens, which is
+what stops real pinching.
+
+Floor (temporary, for testing): n = up, slab = lowest collision vertex - floorY,
+the whole room goes to the cell, repeated with the pairs for the same reason.
+
+Why it holds:
+    - A collision vertex is a weighted average of its tet's nodes (weights >= 0,
+      sum 1), so it approaches the plane at most as much as its side's approach
+      and the pair ends at least hardSkin apart along n.
+    - When the pairs settle, every pair holds with the final motions. In the last
+      pass the min only scales motions toward zero, which never makes a node
+      approach any plane more than that plane allowed.
+    - Along a fixed n the gap between the two sides is a concave function of
+      time for straight motions, so it is never below its smaller end value.
+
+Only pairs inside candidatePairs are protected.
+*/
+[BurstCompile]
+public struct LatticeCellsPositionLimit : IJob
+{
+    private const int RetreatPasses = 4;
+    private const float Tolerance = 1e-5f;
+
+    public float hardSkin;
+    public float floorY;
+
+    [ReadOnly] public NativeList<LatticeCell> latticeCells;
+    [ReadOnly] public NativeArray<int2> candidatePairs;
+    [ReadOnly] public NativeArray<float4> pairContacts;
+
+    [ReadOnly] public NativeList<int> activeCollisionLattices;
+    [ReadOnly] public NativeList<int> latticeColReferences;
+    [ReadOnly] public NativeList<CollisionWraper> collisionWrapers;
+    [ReadOnly] public NativeArray<float3> colVertPrevPositions;
+    [ReadOnly] public NativeList<DynamicVertex> collisionVertices;
+
+    public NativeList<Particle> particles;
+
+
+    public void Execute()
+    {
+        NativeArray<float> alpha = new NativeArray<float>(particles.Length, Allocator.Temp);
+        for (int i = 0; i < alpha.Length; i++) alpha[i] = 1f;
+
+        // Pair planes, (n, room)
+        NativeArray<float4> planes = new NativeArray<float4>(candidatePairs.Length, Allocator.Temp);
+        NativeArray<float> slabs = new NativeArray<float>(candidatePairs.Length, Allocator.Temp);
+        for (int i = 0; i < candidatePairs.Length; i++)
+        {
+            int2 pair = candidatePairs[i];
+            LatticeCell A = latticeCells[pair.x];
+            LatticeCell B = latticeCells[pair.y];
+
+            float3 n = pairContacts[i].xyz;
+            if (math.lengthsq(n) == 0f)
+            {
+                n = CellPrevCenter(A) - CellPrevCenter(B);
+                float dist = math.length(n);
+                n = dist > 1e-6f ? n / dist : new float3(0f, 1f, 0f);
+            }
+
+            CollisionWraper wraperA = collisionWrapers[latticeColReferences[pair.x]];
+            CollisionWraper wraperB = collisionWrapers[latticeColReferences[pair.y]];
+            float minA = float.MaxValue;
+            for (int v = wraperA.colVertsRange.x; v < wraperA.colVertsRange.y; v++)
+                minA = math.min(minA, math.dot(n, colVertPrevPositions[v]));
+            float maxB = float.MinValue;
+            for (int v = wraperB.colVertsRange.x; v < wraperB.colVertsRange.y; v++)
+                maxB = math.max(maxB, math.dot(n, colVertPrevPositions[v]));
+
+            slabs[i] = minA - maxB;
+            planes[i] = new float4(n, math.max(slabs[i] - hardSkin, 0f));
+        }
+
+        // Floor gaps at the start of the substep
+        NativeArray<float> floorGaps = new NativeArray<float>(activeCollisionLattices.Length, Allocator.Temp);
+        for (int a = 0; a < floorGaps.Length; a++)
+        {
+            CollisionWraper wraper = collisionWrapers[latticeColReferences[activeCollisionLattices[a]]];
+            float lowestY = float.MaxValue;
+            for (int v = wraper.colVertsRange.x; v < wraper.colVertsRange.y; v++)
+                lowestY = math.min(lowestY, colVertPrevPositions[v].y);
+            floorGaps[a] = lowestY - floorY;
+        }
+
+        // Caps, a retreating side gives room until nothing changes
+        bool settled = false;
+        for (int pass = 0; pass < RetreatPasses && !settled; pass++)
+        {
+            settled = true;
+            for (int a = 0; a < floorGaps.Length; a++)
+                if (CapFloor(alpha, activeCollisionLattices[a], floorGaps[a], true)) settled = false;
+            for (int i = 0; i < candidatePairs.Length; i++)
+                if (CapPair(alpha, i, planes[i], slabs[i], true)) settled = false;
+        }
+
+        // Last pass, no retreats and no real end test: its caps hold whatever else happens
+        if (!settled)
+        {
+            for (int a = 0; a < floorGaps.Length; a++)
+                CapFloor(alpha, activeCollisionLattices[a], floorGaps[a], false);
+            for (int i = 0; i < candidatePairs.Length; i++)
+                CapPair(alpha, i, planes[i], slabs[i], false);
         }
 
         // Apply
@@ -887,19 +1178,123 @@ public struct LatticeCellsPositionLimit : IJob
         }
 
         alpha.Dispose();
+        planes.Dispose();
+        slabs.Dispose();
+        floorGaps.Dispose();
     }
 
-    // Every node of the cell moving along dir by more than share is capped to share
-    private void CapCell(NativeArray<float> alpha, in LatticeCell c, float3 dir, float share)
+    // True when a node got capped
+    private bool CapPair(NativeArray<float> alpha, int index, float4 plane, float slab, bool allowRetreat)
     {
+        int2 pair = candidatePairs[index];
+        LatticeCell A = latticeCells[pair.x];
+        LatticeCell B = latticeCells[pair.y];
+        float3 n = plane.xyz;
+
+        float approachA = MaxApproach(alpha, A, -n);
+        float approachB = MaxApproach(alpha, B, n);
+
+        float available = plane.w;
+        if (allowRetreat) available -= math.min(approachA, 0f) + math.min(approachB, 0f);
+
+        approachA = math.max(approachA, 0f);
+        approachB = math.max(approachB, 0f);
+        if (approachA + approachB <= available) return false;
+        if (allowRetreat && EndsApart(alpha, index, n, slab)) return false;
+
+        float shareA = available * approachA / (approachA + approachB);
+        float shareB = math.max(available - shareA, 0f);    // rounding can push it just below 0
+        bool cappedA = CapCell(alpha, A, -n, shareA);
+        bool cappedB = CapCell(alpha, B, n, shareB);
+        return cappedA || cappedB;
+    }
+
+    // The worst node only says the pair might touch, this looks at where the meshes really end up
+    private bool EndsApart(NativeArray<float> alpha, int index, float3 n, float slab)
+    {
+        int2 pair = candidatePairs[index];
+        LatticeCell A = latticeCells[pair.x];
+        LatticeCell B = latticeCells[pair.y];
+        if (pairContacts[index].w - hardSkin > MaxMove(alpha, A) + MaxMove(alpha, B)) return true;
+        if (slab < hardSkin) return false;
+
+        float endA = LowestVert(alpha, A, collisionWrapers[latticeColReferences[pair.x]], n);
+        float endB = -LowestVert(alpha, B, collisionWrapers[latticeColReferences[pair.y]], -n);
+        return endA - endB >= hardSkin - Tolerance;
+    }
+
+    // True when a node got capped
+    private bool CapFloor(NativeArray<float> alpha, int cellIdx, float gap, bool realEnd)
+    {
+        LatticeCell cell = latticeCells[cellIdx];
+        float3 down = new float3(0f, -1f, 0f);
+        float room = math.max(gap - hardSkin, 0f);
+        if (MaxApproach(alpha, cell, down) <= room) return false;
+
+        CollisionWraper wraper = collisionWrapers[latticeColReferences[cellIdx]];
+        if (realEnd && LowestVert(alpha, cell, wraper, -down) >= floorY + math.min(gap, hardSkin) - Tolerance) return false;
+        return CapCell(alpha, cell, down, room);
+    }
+
+    // The lowest of the cell's collision vertices along dir, at the end of the capped motion
+    private float LowestVert(NativeArray<float> alpha, in LatticeCell c, in CollisionWraper wraper, float3 dir)
+    {
+        float lowest = float.MaxValue;
+        for (int v = wraper.colVertsRange.x; v < wraper.colVertsRange.y; v++)
+        {
+            DynamicVertex vertex = collisionVertices[v];
+            int4 tet = FullCollisionJob.CellTet(vertex.tet);
+            float3 end = 0f;
+            for (int k = 0; k < 4; k++)
+            {
+                int idx = FullCollisionJob.CellNode(c, tet[k]);
+                Particle p = particles[idx];
+                end += vertex.bary[k] * (p.previousPosition + alpha[idx] * (p.currentPosition - p.previousPosition));
+            }
+            lowest = math.min(lowest, math.dot(dir, end));
+        }
+        return lowest;
+    }
+
+    // The largest distance any node of the cell moves with its current alpha
+    private float MaxMove(NativeArray<float> alpha, in LatticeCell c)
+    {
+        float most = 0f;
         for (int k = 0; k < 8; k++)
         {
-            float approach = math.dot(dir, NodeDisplacement(c, k));
-            if (approach <= share) continue;
-
             int idx = FullCollisionJob.CellNode(c, k);
-            alpha[idx] = math.min(alpha[idx], share / approach);
+            Particle p = particles[idx];
+            most = math.max(most, alpha[idx] * math.length(p.currentPosition - p.previousPosition));
         }
+        return most;
+    }
+
+    // Every node of the cell moving along dir by more than share is capped to share. True when one got capped
+    private bool CapCell(NativeArray<float> alpha, in LatticeCell c, float3 dir, float share)
+    {
+        bool capped = false;
+        for (int k = 0; k < 8; k++)
+        {
+            int idx = FullCollisionJob.CellNode(c, k);
+            float approach = math.dot(dir, NodeDisplacement(c, k));
+            if (approach * alpha[idx] <= share) continue;
+
+            alpha[idx] = share / approach;
+            capped = true;
+        }
+        return capped;
+    }
+
+    // The most any node of the cell moves along dir with its current alpha, negative when all move away
+    private float MaxApproach(NativeArray<float> alpha, in LatticeCell c, float3 dir)
+    {
+        float most = float.MinValue;
+        for (int k = 0; k < 8; k++)
+        {
+            int idx = FullCollisionJob.CellNode(c, k);
+            most = math.max(most, alpha[idx] * math.dot(dir, NodeDisplacement(c, k)));
+        }
+        return most;
     }
 
     private float3 NodeDisplacement(in LatticeCell c, int k)
@@ -961,7 +1356,8 @@ public static class FullCollisionJob
         1. Broad phase       candidate cell pairs
         2. Narrow phase      collision vertices, then one (n, gap) per pair
         3. Stage 1           velocity contacts, `sweeps` passes
-        4. Stage 3           position limit, guarantees >= skin / 2 between
+        4. Stage 2           slide, the lighter side gives way before stage 3 cuts
+        5. Stage 3           position limit, guarantees >= skin / 2 between
                              the collision meshes of every candidate pair
 
     Completes the handle before returning.
@@ -1038,7 +1434,24 @@ public static class FullCollisionJob
         };
         handle = velTransfer.Schedule(handle);
 
-        // 4. Stage 3, position limit
+        // 4. Stage 2, slide
+        LatticeCellsSlide slide = new LatticeCellsSlide
+        {
+            hardSkin = 0.5f * skin,
+            floorY = 0f,    // temporary test floor
+            latticeCells = latticeCells,
+            candidatePairs = candidatePairs.AsArray(),
+            pairContacts = pairContacts.AsArray(),
+            activeCollisionLattices = activeCollisionLattices,
+            latticeColReferences = latticeColReferences,
+            collisionWrapers = collisionWrapers,
+            colVertPrevPositions = colVertPrevPositions.AsArray(),
+            collisionVertices = collisionVertices,
+            particles = particles
+        };
+        handle = slide.Schedule(handle);
+
+        // 5. Stage 3, position limit
         LatticeCellsPositionLimit positionLimit = new LatticeCellsPositionLimit
         {
             hardSkin = 0.5f * skin,
@@ -1050,6 +1463,7 @@ public static class FullCollisionJob
             latticeColReferences = latticeColReferences,
             collisionWrapers = collisionWrapers,
             colVertPrevPositions = colVertPrevPositions.AsArray(),
+            collisionVertices = collisionVertices,
             particles = particles
         };
         handle = positionLimit.Schedule(handle);
@@ -1246,6 +1660,20 @@ public static class FullCollisionJob
         {
             case 0: return c.v0; case 1: return c.v1; case 2: return c.v2; case 3: return c.v3;
             case 4: return c.v4; case 5: return c.v5; case 6: return c.v6; default: return c.v7;
+        }
+    }
+
+    // Corners (local cell nodes) of tet t of the 5-tet split, same order as the preprocessor
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int4 CellTet(int t)
+    {
+        switch (t)
+        {
+            case 0: return new int4(0, 3, 6, 5);
+            case 1: return new int4(0, 5, 6, 4);
+            case 2: return new int4(0, 6, 3, 2);
+            case 3: return new int4(5, 3, 6, 7);
+            default: return new int4(0, 3, 5, 1);
         }
     }
 
