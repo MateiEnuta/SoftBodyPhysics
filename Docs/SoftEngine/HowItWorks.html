@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SoftEngine: how it works</title>
+<style>
+  @page { size: A4; margin: 17mm 16mm 18mm 16mm; }
+  :root { --ink:#1d2330; --soft:#5b6475; --line:#c9d0dc; --a:#2f6fdb; --b:#e0803a; --ok:#2e9a62; --bad:#cf4b4b; --pale:#f3f6fb; --paleb:#fdf3ea; }
+  * { box-sizing: border-box; }
+  body { font: 10.6pt/1.5 -apple-system, "Helvetica Neue", Arial, sans-serif; color: var(--ink); margin: 0; }
+  h1 { font-size: 25pt; margin: 0 0 4pt; letter-spacing: -0.3pt; }
+  h2 { font-size: 15.5pt; margin: 0 0 7pt; padding-top: 2pt; border-bottom: 2px solid var(--ink); padding-bottom: 3pt; break-before: page; }
+  h2.first { break-before: auto; }
+  h3 { font-size: 11.5pt; margin: 13pt 0 3pt; }
+  p { margin: 0 0 7pt; }
+  ul, ol { margin: 0 0 7pt; padding-left: 16pt; }
+  li { margin-bottom: 2.5pt; }
+  code { font: 9.2pt Menlo, Consolas, monospace; background: var(--pale); padding: 0 2.5pt; border-radius: 2pt; }
+  .sub { color: var(--soft); font-size: 11.5pt; margin-bottom: 12pt; }
+  .box { background: var(--pale); border-left: 3px solid var(--a); padding: 7pt 10pt; margin: 8pt 0; break-inside: avoid; }
+  .box.warn { background: var(--paleb); border-left-color: var(--b); }
+  .formula { font: 9.6pt Menlo, Consolas, monospace; background: var(--pale); padding: 6pt 10pt; margin: 6pt 0 8pt; white-space: pre; break-inside: avoid; }
+  table { border-collapse: collapse; width: 100%; margin: 6pt 0 10pt; font-size: 9.6pt; break-inside: avoid; }
+  th { text-align: left; border-bottom: 1.5px solid var(--ink); padding: 3pt 6pt 3pt 0; vertical-align: bottom; }
+  td { border-bottom: 1px solid var(--line); padding: 3pt 6pt 3pt 0; vertical-align: top; }
+  td.n, th.n { text-align: right; white-space: nowrap; }
+  figure { margin: 9pt 0 11pt; break-inside: avoid; text-align: center; }
+  figcaption { font-size: 9.2pt; color: var(--soft); margin-top: 4pt; text-align: left; }
+  svg { max-width: 100%; height: auto; }
+  svg text { font: 10px -apple-system, "Helvetica Neue", Arial, sans-serif; fill: var(--ink); }
+  svg .s { fill: var(--soft); } svg .w { fill: #fff; } svg .bold { font-weight: 600; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14pt; }
+  .toc { columns: 2; font-size: 10pt; margin-top: 8pt; }
+  .toc div { margin-bottom: 2pt; }
+  .small { font-size: 9.4pt; color: var(--soft); }
+</style>
+</head>
+<body>
+
+<h1>SoftEngine: how it works</h1>
+<div class="sub">The soft body engine in <code>Assets/1_Scripts/PhysicsScripts/2_SoftEngine</code>, explained from the body to the frame. State of 16 November 2026.</div>
+
+<p>This document explains what the engine does and why it is built the way it is. It follows one physics step from start to end, then compares the result with the engine it replaces (<code>1_PhysicsSolver</code>), lists what was tried and thrown away, and ends with a reference of every setting. Numbers are measured on your M1 unless stated otherwise.</p>
+
+<div class="toc">
+  <div>1. The idea in one page</div>
+  <div>2. What a body is made of</div>
+  <div>3. One substep, start to end</div>
+  <div>4. The elastic solve</div>
+  <div>5. Finding contacts</div>
+  <div>6. Solving contacts</div>
+  <div>7. The limit step: the guarantee</div>
+  <div>8. Damping, sleeping, the step-time limit</div>
+  <div>9. Compared with the previous engine</div>
+  <div>10. What was tried and dropped</div>
+  <div>11. Settings and tuning</div>
+  <div>12. Known limits</div>
+</div>
+
+<h2 class="first" style="margin-top:14pt">1. The idea in one page</h2>
+
+<p>Every body is a block of jelly cubes (a <b>lattice</b>) with the mesh you see glued inside it. Only the corners of the cubes, the <b>nodes</b>, ever move. Everything else, the visible mesh and the collision surface, is carried along by them.</p>
+
+<p>A physics step is a few identical <b>substeps</b> (4 by default). Each substep does six things in a fixed order:</p>
+
+<figure>
+<svg viewBox="0 0 700 150" width="700">
+  <defs><marker id="ar" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#5b6475"/></marker></defs>
+  <g>
+    <rect x="4"   y="20" width="100" height="62" rx="5" fill="#e6eefc" stroke="#2f6fdb"/>
+    <rect x="120" y="20" width="100" height="62" rx="5" fill="#e6eefc" stroke="#2f6fdb"/>
+    <rect x="236" y="20" width="100" height="62" rx="5" fill="#e6eefc" stroke="#2f6fdb"/>
+    <rect x="352" y="20" width="100" height="62" rx="5" fill="#e6eefc" stroke="#2f6fdb"/>
+    <rect x="468" y="20" width="100" height="62" rx="5" fill="#fbe9da" stroke="#e0803a"/>
+    <rect x="584" y="20" width="110" height="62" rx="5" fill="#e6eefc" stroke="#2f6fdb"/>
+    <text x="54"  y="40" text-anchor="middle" class="bold">1 Predict</text>
+    <text x="54"  y="55" text-anchor="middle" class="s">gravity, velocity</text>
+    <text x="54"  y="68" text-anchor="middle" class="s">move the nodes</text>
+    <text x="170" y="40" text-anchor="middle" class="bold">2 Elastic</text>
+    <text x="170" y="55" text-anchor="middle" class="s">cells pull back</text>
+    <text x="170" y="68" text-anchor="middle" class="s">into shape</text>
+    <text x="286" y="40" text-anchor="middle" class="bold">3 Detect</text>
+    <text x="286" y="55" text-anchor="middle" class="s">who can touch,</text>
+    <text x="286" y="68" text-anchor="middle" class="s">one plane per pair</text>
+    <text x="402" y="40" text-anchor="middle" class="bold">4 Contacts</text>
+    <text x="402" y="55" text-anchor="middle" class="s">push apart,</text>
+    <text x="402" y="68" text-anchor="middle" class="s">friction</text>
+    <text x="518" y="40" text-anchor="middle" class="bold">5 Limit</text>
+    <text x="518" y="55" text-anchor="middle" class="s">the guarantee:</text>
+    <text x="518" y="68" text-anchor="middle" class="s">nothing crosses</text>
+    <text x="639" y="40" text-anchor="middle" class="bold">6 Velocity</text>
+    <text x="639" y="55" text-anchor="middle" class="s">from what really</text>
+    <text x="639" y="68" text-anchor="middle" class="s">happened, damping</text>
+    <path d="M104,51 H118" stroke="#5b6475" marker-end="url(#ar)"/><path d="M220,51 H234" stroke="#5b6475" marker-end="url(#ar)"/>
+    <path d="M336,51 H350" stroke="#5b6475" marker-end="url(#ar)"/><path d="M452,51 H466" stroke="#5b6475" marker-end="url(#ar)"/>
+    <path d="M568,51 H582" stroke="#5b6475" marker-end="url(#ar)"/>
+  </g>
+  <rect x="4" y="104" width="14" height="10" fill="#e6eefc" stroke="#2f6fdb"/><text x="24" y="113" class="s">runs on all cores</text>
+  <rect x="150" y="104" width="14" height="10" fill="#fbe9da" stroke="#e0803a"/><text x="170" y="113" class="s">one thread (walks a list)</text>
+  <text x="4" y="138" class="s">After the last substep: bodies that went nowhere fall asleep. If the step ran out of time, some substeps are skipped (slow motion).</text>
+</svg>
+</figure>
+
+<p>Three ideas carry the whole design:</p>
+<ol>
+  <li><b>Positions first, velocity last.</b> Every stage moves node positions. The velocity of a node is simply how far it really got in the substep, divided by the time. Nothing can "explode" from a force that is too large, because there are no forces, only places to be.</li>
+  <li><b>Collision is planes between small convex pieces.</b> The surface of every body is cut into small convex pieces. For every pair of pieces that could touch, the engine finds one plane that separates them at the start of the substep. If both pieces are still on their own side of that plane at the end, they never touched in between. That is the whole no-penetration argument, and it is checked on the real points, at the end, every substep.</li>
+  <li><b>Two layers of contact.</b> A fast, parallel, "good enough" solve pushes bodies apart and gives believable behaviour. A small, strict step after it (the limit step) is the guarantee. The first is allowed to be imperfect because the second cannot be fooled.</li>
+</ol>
+
+<div class="box"><b>Where the code is.</b> <code>Core/SoftSolver.cs</code> holds all data and the order of the stages. The jobs are in <code>MotionJobs.cs</code> (predict, elastic, velocity, damping, sleeping, visuals), <code>DetectionJobs.cs</code> (stage 3) and <code>ContactJobs.cs</code> (stages 4 and 5). <code>LatticeBuilder.cs</code> turns a mesh into a body. <code>SoftWorld</code> and <code>SoftBody</code> are the two components you put in a scene. Every job starts with a long comment that says what it does and why.</div>
+
+<h2>2. What a body is made of</h2>
+
+<div class="two">
+<div>
+<p>When a <code>SoftBody</code> starts, <code>LatticeBuilder</code> lays a grid of cubes with 0.25 m edges over its mesh and keeps every cube the mesh reaches into. Those cubes are the <b>cells</b>, their corners are the <b>nodes</b>. The mass of the body is spread over the nodes.</p>
+<p>Each cell is split into <b>5 tetrahedra</b>: one in the middle and one in each of four corners. The elastic solve works on those. Every second cell uses the mirrored split, so the diagonal on a face shared by two cells is the same line for both and the surface has no cracks.</p>
+<p>Every vertex of the mesh is <b>glued into one tetrahedron</b>: its position is a fixed mix of that tetrahedron's 4 nodes. Move the nodes and the vertex follows. The visible mesh and the collision surface are both glued in this way.</p>
+</div>
+<figure style="margin-top:0">
+<svg viewBox="0 0 300 250" width="300">
+  <g stroke="#c9d0dc" stroke-width="1">
+    <path d="M30,30 H270 M30,78 H270 M30,126 H270 M30,174 H270 M30,222 H270"/>
+    <path d="M30,30 V222 M78,30 V222 M126,30 V222 M174,30 V222 M222,30 V222 M270,30 V222"/>
+  </g>
+  <g fill="#e6eefc" opacity="0.9">
+    <rect x="78" y="30" width="144" height="192"/><rect x="30" y="78" width="240" height="96"/>
+  </g>
+  <g stroke="#9fb6de" stroke-width="1" fill="none">
+    <path d="M78,30 H222 M30,78 H270 M30,126 H270 M30,174 H270 M78,222 H222 M30,78 V174 M78,30 V222 M126,30 V222 M174,30 V222 M222,30 V222 M270,78 V174"/>
+  </g>
+  <circle cx="150" cy="126" r="88" fill="none" stroke="#1d2330" stroke-width="2"/>
+  <g fill="#2f6fdb">
+    <circle cx="78" cy="30" r="3"/><circle cx="126" cy="30" r="3"/><circle cx="174" cy="30" r="3"/><circle cx="222" cy="30" r="3"/>
+    <circle cx="30" cy="78" r="3"/><circle cx="78" cy="78" r="3"/><circle cx="126" cy="78" r="3"/><circle cx="174" cy="78" r="3"/><circle cx="222" cy="78" r="3"/><circle cx="270" cy="78" r="3"/>
+    <circle cx="30" cy="126" r="3"/><circle cx="78" cy="126" r="3"/><circle cx="126" cy="126" r="3"/><circle cx="174" cy="126" r="3"/><circle cx="222" cy="126" r="3"/><circle cx="270" cy="126" r="3"/>
+    <circle cx="30" cy="174" r="3"/><circle cx="78" cy="174" r="3"/><circle cx="126" cy="174" r="3"/><circle cx="174" cy="174" r="3"/><circle cx="222" cy="174" r="3"/><circle cx="270" cy="174" r="3"/>
+    <circle cx="78" cy="222" r="3"/><circle cx="126" cy="222" r="3"/><circle cx="174" cy="222" r="3"/><circle cx="222" cy="222" r="3"/>
+  </g>
+  <path d="M181,43.5 A88,88 0 0 1 222,75" fill="none" stroke="#e0803a" stroke-width="4"/>
+  <g fill="#e0803a"><circle cx="181" cy="43.5" r="3.5"/><circle cx="203" cy="55" r="3.5"/><circle cx="222" cy="75" r="3.5"/></g>
+  <text x="228" y="46" fill="#e0803a" style="fill:#e0803a">a piece and</text><text x="228" y="58" style="fill:#e0803a">its hull points</text>
+  <text x="150" y="130" text-anchor="middle" class="s">the mesh</text>
+  <text x="34" y="243" class="s">blue dots: nodes. blue squares: cells (the lattice)</text>
+</svg>
+<figcaption>A ball in its lattice, seen from the side. The lattice sticks out a little: nodes are outside the mesh.</figcaption>
+</figure>
+</div>
+
+<h3>Pieces and hull points: what collides</h3>
+<p>For collision, the part of the surface inside one cell is cut into <b>pieces</b>, patches that are convex (they bend outwards only). A cell on a flat or rounded part of the surface has one piece. A cell where the surface bends inwards has several.</p>
+<p>A piece is not stored as triangles. It keeps only a handful of its vertices, the <b>hull points</b>: just enough of them that no vertex of the patch sticks out of the shape they span by more than 1.25 mm. On your scene that is about 10 points per piece. At runtime the engine never looks at a triangle, only at these points. This is the single biggest reason collision is cheap: the question "how far apart are these two pieces" becomes a question about two small clouds of points.</p>
+<p>Two details that took a failed attempt each to get right:</p>
+<ul>
+  <li>Hull points are picked <b>per tetrahedron</b>, not per cell. A tetrahedron deforms as one flat-sided unit, so points that span the patch at rest still span it when crushed. Picked per cell, vertices popped out of the hull under a hard crush and the real surfaces came within 3 mm.</li>
+  <li>The pieces of each block of 2 x 2 x 2 cells are stored next to each other as a <b>chunk</b>. That is what makes the search in section 5 fast.</li>
+</ul>
+
+<h2>3. One substep, start to end</h2>
+
+<p><code>SoftSolver.Substep</code> runs the stages one after the other. Each stage is finished before the next starts. The stages that go over many things of the same kind are spread over all cores; the few that only walk through a list once run on the main thread directly. (I measured the alternative, chaining all jobs and waiting once at the end. It was not faster, and finishing each stage lets the solver skip whole stages when it sees they have nothing to do.)</p>
+
+<table>
+<tr><th style="width:16%">Stage</th><th style="width:22%">Job</th><th>What it does</th><th class="n" style="width:11%">ms*</th></tr>
+<tr><td>1 Predict</td><td><code>PredictJob</code></td><td>Remembers where every node is (<code>prev</code>), adds gravity to its velocity and moves it along (<code>pos</code>). The rest of the substep only changes <code>pos</code>.</td><td class="n">0.05</td></tr>
+<tr><td>2 Elastic</td><td><code>ElasticJob</code> x 8</td><td>Every cell pulls its 5 tetrahedra back towards their rest shape. Cells of one colour never share a node, so each colour runs in parallel. Section 4.</td><td class="n">1.26</td></tr>
+<tr><td rowspan="4">3 Detect</td><td><code>PieceJob</code></td><td>For every piece: its hull points at the start of the substep, the box it will stay in, and how far it can move.</td><td class="n">0.20</td></tr>
+<tr><td><code>PairsJob</code>, <code>PairSearchJob</code>, <code>PairListJob</code></td><td>Broad phase: the list of piece pairs whose boxes overlap. Kept across substeps for as long as it stays valid.</td><td class="n">0.20</td></tr>
+<tr><td><code>PlaneJob</code></td><td>Narrow phase: for every pair that is close, the plane between the two pieces, and a contact if they can touch.</td><td class="n">0.44</td></tr>
+<tr><td><code>BuildContactsJob</code></td><td>Collects the contacts, adds floor contacts, and gives every body the list of its own contacts.</td><td class="n">0.10</td></tr>
+<tr><td>4 Contacts</td><td><code>ContactSweepJob</code> x 3</td><td>Pushes pieces apart where they would end too close, one body per core. Friction in the last sweep. Section 6.</td><td class="n">0.35</td></tr>
+<tr><td rowspan="2">5 Limit</td><td><code>LatePieceJob</code> + a second Detect</td><td>Only when a body was pushed further than expected: looks again for contacts of exactly those pieces.</td><td class="n">0.04</td></tr>
+<tr><td><code>LimitJob</code></td><td>Checks every contact on the real points. Where two pieces would end closer than allowed, takes motion away until they do not. Section 7.</td><td class="n">0.10</td></tr>
+<tr><td>6 Velocity</td><td><code>VelocityJob</code>, <code>DampJob</code></td><td>Velocity = (pos - prev) / dt. Then damping takes a part of every body's wobble.</td><td class="n">0.05</td></tr>
+</table>
+<p class="small">* Milliseconds per physics step (4 substeps) in your scene when it had 24 bodies and 2544 pieces, Burst safety checks off, 3 sweeps, nobody asleep. Total 2.8 ms.</p>
+
+<p>After the substeps, once per step: <code>SleepJob</code> decides who is asleep (section 8), and <code>SoftWorld</code> draws the meshes.</p>
+
+<div class="box"><b>Why 4 substeps and not 10.</b> The old engine used 10. Substeps are the most expensive knob there is, since everything runs once per substep. Collision no longer needs small steps to be safe (the limit step is exact for any step length), so the number is set by how stiff you want materials to feel, and 4 is enough for that with the new elastic solve.</div>
+
+<h2>4. The elastic solve</h2>
+
+<p>Each tetrahedron compares its shape now with its shape at rest. That comparison is a 3 x 3 matrix <b>F</b>, the deformation gradient: the identity when the tetrahedron is at rest, a pure rotation when it has only turned. Two numbers are taken from it:</p>
+
+<div class="formula">I = sum of the squares of F's 9 entries     (3 at rest: how stretched it is overall)
+J = determinant of F                        (1 at rest: its volume, negative when turned inside out)</div>
+
+<p>The material is "stable neo-Hookean" (Smith et al. 2018), the same energy the film and games industry uses for flesh and rubber. Its two stiffness numbers, <b>mu</b> (resists change of shape) and <b>lambda</b> (resists change of volume), come from the Young's modulus and Poisson ratio you set on the body.</p>
+
+<h3>The part that was wrong before, and the fix</h3>
+<p>To use that energy in a position-based solver it has to be written as "constraints", quantities that should be zero. The way you split the energy into constraints decides everything.</p>
+<table>
+<tr><th style="width:27%">Split</th><th style="width:25%">Constraints</th><th>What happens</th></tr>
+<tr><td>Textbook (Macklin, Mueller 2021)</td><td><code>|F|</code> and <code>J - 1 - mu/lambda</code></td><td>Neither is zero at rest: one wants to shrink the tetrahedron to a point, the other to blow it up, and they only cancel. With one pass per substep and stiff bodies they do not cancel well enough. The body shakes itself apart.</td></tr>
+<tr><td>Old engine, and my first version</td><td><code>|F| - sqrt(3)</code> and <code>J - 1</code></td><td>Calm, both zero at rest. But near rest both measure the same thing, volume. A sheared tetrahedron feels almost nothing, so the body has no real resistance to shear. That is why you needed values like 1e+08 to get something that felt stiff, and why floating bodies wobbled.</td></tr>
+<tr><td><b>Now</b></td><td><code>CD = sqrt(I + J*J - 4J)</code> and <code>CH = J - 1</code></td><td>The same energy, grouped so both parts are zero at rest and measure different things: <code>CD</code> shape and size (stiffness mu), <code>CH</code> volume (stiffness lambda). To first order this is exactly Hooke's law with your mu and lambda. Stiffness values now mean what they say.</td></tr>
+</table>
+<p>Both constraints pull on the same 4 nodes, so they are solved <b>together as one small 2 x 2 system</b> per tetrahedron. Solved one after the other, each would undo part of the other. The arithmetic is in double precision: at rest <code>CD</code> is the root of a difference of large numbers, and in single precision the rounding alone was enough to make a stiff body buzz.</p>
+<p>Last, a <b>stretch limit</b>: no edge of a cell gets longer than <code>maxStretch</code> times its rest length (2 by default). A very soft body hit hard would otherwise be pulled into long strings before its own stiffness reacts.</p>
+
+<div class="box warn"><b>What "stiff" can mean here.</b> Each substep makes one pass over the tetrahedra. A light body with a very high Young's modulus is stiffer than one pass can express, and ends up as stiff as the pass count allows, not as stiff as the number says. More substeps make it stiffer. This is a property of every solver of this family, not a bug.</div>
+
+<h2>5. Finding contacts</h2>
+
+<p>Detection answers one question for every pair of pieces from different bodies: can these two get within <code>skin</code> (25 mm) of each other during this substep? If yes, it produces a plane to keep them apart. It works in three steps that each throw away most of what is left.</p>
+
+<h3>Broad phase: boxes inside boxes</h3>
+<div class="two">
+<div>
+<p>Every piece gets a box. Boxes of the pieces of one chunk are wrapped in a chunk box, and the chunk boxes of one body in a body box. The search goes top down:</p>
+<ul>
+  <li>two <b>bodies</b> whose boxes do not overlap are done;</li>
+  <li>of the other body, only the <b>chunks</b> that reach into this body's box are looked at;</li>
+  <li>only for two overlapping chunks are the <b>pieces</b> compared one by one.</li>
+</ul>
+<p>Most of the surface of most bodies is nowhere near another body and is dropped a whole chunk or a whole body at a time. Each body searches for its pairs on its own core.</p>
+</div>
+<figure style="margin-top:0">
+<svg viewBox="0 0 310 190" width="310">
+  <rect x="10" y="20" width="150" height="130" fill="none" stroke="#2f6fdb" stroke-width="1.5" stroke-dasharray="5 3"/>
+  <rect x="140" y="50" width="160" height="130" fill="none" stroke="#e0803a" stroke-width="1.5" stroke-dasharray="5 3"/>
+  <ellipse cx="85" cy="85" rx="66" ry="56" fill="#e6eefc" stroke="#2f6fdb"/>
+  <rect x="158" y="68" width="124" height="94" rx="4" fill="#fbe9da" stroke="#e0803a"/>
+  <rect x="120" y="78" width="38" height="38" fill="none" stroke="#2f6fdb" stroke-width="1.5"/>
+  <rect x="156" y="70" width="34" height="46" fill="none" stroke="#e0803a" stroke-width="1.5"/>
+  <rect x="140" y="88" width="15" height="14" fill="#2f6fdb" opacity="0.55"/>
+  <rect x="158" y="86" width="13" height="16" fill="#e0803a" opacity="0.6"/>
+  <text x="14" y="15" style="fill:#2f6fdb">body box A</text><text x="232" y="45" style="fill:#e0803a">body box B</text>
+  <text x="104" y="74" class="s">chunks</text><text x="100" y="166" class="s">pieces</text>
+  <path d="M124,156 L146,104" stroke="#5b6475"/>
+</svg>
+<figcaption>Only where the two body boxes overlap are chunks compared, and only for overlapping chunks, pieces.</figcaption>
+</figure>
+</div>
+
+<p><b>The list is not rebuilt every substep.</b> Each piece gets a "frame box": the box it needs now, stretched along where its nodes are heading for the next whole frame, plus some slack. The pair list made from frame boxes stays valid for as long as every piece stays inside its frame box, which <code>PieceJob</code> checks each substep. A pile lying still keeps its list for seconds. A falling body gets a new one about once per frame.</p>
+
+<h3>Skipping far pairs with one subtraction</h3>
+<p>The list still holds many pairs that are nowhere near touching (about 14 pairs for every real contact in your scene). When a pair was last examined and found far apart, it remembers a <b>budget</b>: the distance found then, plus how far both pieces had travelled by then. Every piece keeps a running total of how far it has travelled. As long as</p>
+<div class="formula">budget - (travel + reach of A) - (travel + reach of B) > skin</div>
+<p>the two are provably still more than skin apart at the end of this substep, whatever they did in between. That is one subtraction per pair, and it removes most of the list before any geometry is done.</p>
+
+<h3>Narrow phase: the plane between two pieces</h3>
+<div class="two">
+<figure style="margin-top:0">
+<svg viewBox="0 0 310 210" width="310">
+  <defs><marker id="ar2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#1d2330"/></marker></defs>
+  <polygon points="60,20 150,14 210,44 196,84 96,90 50,60" fill="#e6eefc" stroke="#2f6fdb" stroke-width="1.5"/>
+  <polygon points="90,150 170,128 250,146 262,186 130,200" fill="#fbe9da" stroke="#e0803a" stroke-width="1.5"/>
+  <g fill="#2f6fdb"><circle cx="60" cy="20" r="3"/><circle cx="150" cy="14" r="3"/><circle cx="210" cy="44" r="3"/><circle cx="196" cy="84" r="3"/><circle cx="96" cy="90" r="3.8"/><circle cx="50" cy="60" r="3"/></g>
+  <g fill="#e0803a"><circle cx="90" cy="150" r="3"/><circle cx="170" cy="128" r="3.8"/><circle cx="250" cy="146" r="3"/><circle cx="262" cy="186" r="3"/><circle cx="130" cy="200" r="3"/></g>
+  <path d="M10,94.9 L300,78.4" stroke="#5b6475" stroke-dasharray="3 3"/>
+  <path d="M10,137.1 L300,120.6" stroke="#5b6475" stroke-dasharray="3 3"/>
+  <path d="M278,120 L276,82" stroke="#1d2330" marker-end="url(#ar2)"/><path d="M276,82 L278,120" stroke="#1d2330" marker-end="url(#ar2)"/>
+  <text x="283" y="104" class="bold">slab</text>
+  <path d="M30,134 L27,84" stroke="#1d2330" stroke-width="1.5" marker-end="url(#ar2)"/><text x="12" y="80" class="bold">n</text>
+  <text x="118" y="52" style="fill:#2f6fdb">piece A</text><text x="160" y="172" style="fill:#e0803a">piece B</text>
+  <text x="100" y="106" class="s">lowest point of A</text><text x="78" y="124" class="s">highest point of B</text>
+</svg>
+<figcaption>n is the direction that keeps A's points furthest above B's. slab is that distance.</figcaption>
+</figure>
+<div>
+<p>For a pair that is close, <code>PlaneJob</code> looks for the direction <b>n</b> that keeps all of A's hull points as far as possible above all of B's. The distance along n between A's lowest point and B's highest is the <b>slab</b>. Because pieces are convex, the best slab is exactly the distance between them.</p>
+<p>The search is GJK, the standard algorithm for the distance between two convex shapes. It starts from the n of the substep before, which is nearly right, so it usually needs two or three steps.</p>
+<p>A pair gets a <b>contact</b> only if, given where the nodes are heading, the two could end closer than the contact solve or the limit step care about. Most contacts are marked <b>idle</b>: they are in the list so the limit step can check them, but there is nothing to push.</p>
+</div>
+</div>
+
+<div class="box"><b>The key fact.</b> The plane is found at the positions at the <i>start</i> of the substep and is fixed for the substep. Nodes move in straight lines within a substep. So if the points of A are above the points of B along n at the start, and still are at the end, they were above all the way. No sweeping, no time of impact, no tunnelling at any speed. This is why a ball at 140 m/s does not pass through the floor.</div>
+
+<h2>6. Solving contacts</h2>
+
+<p>Every contact has a <b>target</b>: how far apart, along its plane, the two pieces must end.</p>
+<ul>
+  <li>Pieces further apart than skin may come as close as skin, no closer.</li>
+  <li>Pieces already closer than skin are held where they are and moved back out a little each substep (at most <code>pushOutSpeed</code>). A fixed shove every substep would keep kicking a body that just lies there, so the push out slows down as it nears skin.</li>
+</ul>
+
+<h3>One body per core</h3>
+<div class="two">
+<div>
+<p>The usual way to solve contacts is one loop that visits them one after the other, moving both bodies of each. That loop cannot be split over cores, because two contacts may move the same node.</p>
+<p>Here a <b>sweep</b> gives every body its own core. A body moves <b>only its own nodes</b>. What it needs to know about the other side it reads from a <b>snapshot</b> of where every node was when the sweep began. Both bodies of a contact therefore see the same shortfall, and each takes its part of it: the lighter side more, the heavier less. Together that is exactly what was missing.</p>
+<p>Inside one body, the contacts are still visited one after the other, and each first looks at how far its spot has already been moved in this sweep by its neighbours, so contacts that want the same thing do not add up.</p>
+</div>
+<figure style="margin-top:0">
+<svg viewBox="0 0 310 220" width="310">
+  <defs><marker id="ar3" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#2e9a62"/></marker></defs>
+  <rect x="40" y="16" width="170" height="74" rx="6" fill="#e6eefc" stroke="#2f6fdb" stroke-width="1.5"/>
+  <rect x="90" y="124" width="190" height="80" rx="6" fill="#fbe9da" stroke="#e0803a" stroke-width="1.5"/>
+  <text x="125" y="48" text-anchor="middle" class="bold">body A (light)</text><text x="125" y="62" text-anchor="middle" class="s">core 1: moves A only</text>
+  <text x="185" y="166" text-anchor="middle" class="bold">body B (heavy)</text><text x="185" y="180" text-anchor="middle" class="s">core 2: moves B only</text>
+  <path d="M30,99 H300" stroke="#5b6475" stroke-dasharray="3 3"/><path d="M30,115 H300" stroke="#5b6475" stroke-dasharray="3 3"/>
+  <text x="212" y="111" class="s">missing: 16</text>
+  <path d="M150,104 V78" stroke="#2e9a62" stroke-width="2.2" marker-end="url(#ar3)"/><text x="80" y="108" style="fill:#2e9a62">A takes 12</text>
+  <path d="M170,112 V122" stroke="#2e9a62" stroke-width="2.2" marker-end="url(#ar3)"/><text x="178" y="121" style="fill:#2e9a62">B takes 4</text>
+</svg>
+<figcaption>Both sides read the same snapshot and each closes its own share. Nobody writes to the other's nodes.</figcaption>
+</figure>
+</div>
+
+<p>Three sweeps run per substep. This gave about half the solve time of the old single loop, and it scales with the number of bodies.</p>
+
+<h3>Where a contact pushes: spots, and moving cells whole</h3>
+<p>A normal contact pushes at one <b>spot</b> per side, the middle of where the two pieces face each other. A spot is a fixed place in its cell and moves with the cell's 8 nodes. A push moves every node by its share of the spot, so <b>the cell keeps its shape</b> and the elastic solve has nothing to undo in the next substep. (Splitting a push by the mass of each node is what a real point force would do, but outer nodes are lighter than inner ones, the cell bends a little with every push, and a stiff body lying still keeps buzzing.)</p>
+<p>A pair heading for the hard limit becomes <b>firm</b>: it is measured on the real hull points instead of one spot, and each side answers by moving its whole cell. Without this, one spot misses corners that come in fast or at an angle, the limit step has to stop them, and the limit step holds back the heavy side as much as the light one. A 1000 kg cube catching a 1 kg ball in the air was slowed from 17.8 to 8 m/s before firm contacts existed.</p>
+
+<h3>Floor and friction</h3>
+<p>Floor contacts work per hull point. Every point below its target asks its nodes for the lift that brings it back, and every node takes the largest lift asked of it. That satisfies all floor contacts at once and does not depend on their order, so a body that lands straight is not pushed sideways.</p>
+<p>Friction runs in the last sweep, when it is known how hard each contact pushed in total. The sideways slide of the two spots against each other is taken back, at most <code>friction x push</code> (Coulomb's law), and each side again takes its share of the slide as it was when the sweep began.</p>
+
+<div class="box warn"><b>The price of going parallel.</b> Because each body acts on its own, a contact does not hand exactly the same momentum to both sides. In a head-on test of two equal balls about 8% of the momentum goes missing. You said that does not matter to you; it is the trade that bought the speed.</div>
+
+<h2>7. The limit step: the guarantee</h2>
+
+<p>The contact solve is fast and usually leaves nothing to do. But it runs a fixed three sweeps and is allowed to be wrong. <code>LimitJob</code> is the last thing that moves nodes in a substep, and it is the part that cannot be wrong.</p>
+<p>For every contact it measures the real hull points where the nodes are now, in double precision:</p>
+<div class="formula">(lowest point of A along n) - (highest point of B along n)  >=  limit
+limit = the smaller of: the slab at the start, hardSkin (12.5 mm)</div>
+<p>If that holds, the pieces were apart at the start, are apart at the end, and moved in straight lines in between, so they were apart all the way. Because the plane is the best one at the start of every substep, the distance between two pieces can never shrink below hardSkin. The real surface lies inside the hulls (at most 1.25 mm outside them per side), so surfaces cannot touch.</p>
+
+<p>A contact that fails is <b>cut</b>: the room that was available is split between the two sides by how much each came closer, and every hull point that went past its side's share is brought back. How it is brought back depends on how often the list has already been gone through:</p>
+
+<figure>
+<svg viewBox="0 0 690 150" width="690">
+  <defs>
+    <marker id="g" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#9aa3b2"/></marker>
+    <marker id="k" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#2e9a62"/></marker>
+  </defs>
+  <g>
+    <text x="8" y="14" class="bold">Slide (passes 1-4)</text>
+    <rect x="8" y="112" width="200" height="14" fill="#fbe9da" stroke="#e0803a"/><path d="M8,100 H208" stroke="#cf4b4b" stroke-dasharray="3 3"/>
+    <circle cx="40" cy="42" r="4" fill="#2f6fdb"/><path d="M40,42 L150,122" stroke="#9aa3b2" stroke-dasharray="2 2" marker-end="url(#g)"/>
+    <path d="M40,42 L150,98" stroke="#2e9a62" stroke-width="2" marker-end="url(#k)"/>
+    <text x="8" y="142" class="s">loses only the motion towards the other body</text>
+  </g>
+  <g transform="translate(240,0)">
+    <text x="8" y="14" class="bold">Stop (passes 5-10)</text>
+    <rect x="8" y="112" width="200" height="14" fill="#fbe9da" stroke="#e0803a"/><path d="M8,100 H208" stroke="#cf4b4b" stroke-dasharray="3 3"/>
+    <circle cx="40" cy="42" r="4" fill="#2f6fdb"/><path d="M40,42 L150,122" stroke="#9aa3b2" stroke-dasharray="2 2" marker-end="url(#g)"/>
+    <path d="M40,42 L119,99" stroke="#2e9a62" stroke-width="2" marker-end="url(#k)"/>
+    <text x="8" y="142" class="s">goes back along its own path</text>
+  </g>
+  <g transform="translate(480,0)">
+    <text x="8" y="14" class="bold">Freeze (after that)</text>
+    <rect x="8" y="112" width="200" height="14" fill="#fbe9da" stroke="#e0803a"/><path d="M8,100 H208" stroke="#cf4b4b" stroke-dasharray="3 3"/>
+    <circle cx="40" cy="42" r="4" fill="#2f6fdb"/><path d="M40,42 L150,122" stroke="#9aa3b2" stroke-dasharray="2 2" marker-end="url(#g)"/>
+    <circle cx="40" cy="42" r="8" fill="none" stroke="#2e9a62" stroke-width="2"/>
+    <text x="8" y="142" class="s">both cells stay where they started</text>
+  </g>
+</svg>
+<figcaption>Grey: where the node wanted to go. Green: where it ends. Red dashes: as close as it may get.</figcaption>
+</figure>
+
+<ul>
+  <li><b>Slide</b> is gentle: the node stays free to move along the plane and away from it, so nothing sticks to what it touches. This replaced the older behaviour (always "stop"), which was the likely cause of the soft sphere hanging on the cube edge.</li>
+  <li><b>Stop</b> and <b>freeze</b> only ever shorten a node's path, and a frozen contact holds whatever else happens, so the loop always ends. What is left has passed the very check that defines "safe", with the positions that are stored.</li>
+</ul>
+<p>Taking motion away for one contact can break another that was fine, so the list is checked again until one full pass finds nothing. After the first pass only the contacts of bodies that had a cut are checked again. In a calm scene there are no cuts at all and this stage costs 0.04 ms. Nothing here can add energy: a node only ever moves less than it wanted to.</p>
+
+<h3>The second look</h3>
+<p>Detection assumed that contacts push a node at most <code>regionMargin</code> (25 mm) away from where the elastic solve left it. Something fast and heavy hitting something light breaks that assumption: the light body is thrown much further and may now reach pieces it was never paired with. So the last contact sweep reports which bodies it pushed further than that. Only for those, <code>LatePieceJob</code> finds the pieces concerned and detection runs a second time just for them, before the limit step. Usually no body is reported and none of this runs.</p>
+
+<h2>8. Damping, sleeping, the step-time limit</h2>
+
+<h3>Damping (per body)</h3>
+<p>An elastic body with no damping wobbles forever, like a perfect spring. A free E = 67 ball was still wobbling after 10 seconds. <code>DampJob</code> runs right after the velocities are known. It works out how the body is moving and turning <i>as a whole</i> (the motion with the same momentum and angular momentum the nodes have now) and takes away a part of everything else. So a damped body <b>falls, flies and spins exactly like an undamped one and rests in the same shape</b>. It only stops wobbling. The setting is a time: after <code>damping</code> seconds about a third of a wobble is left. 0.1 is the default.</p>
+<p>Damping is also your <b>bounce control</b>: bounce here comes from the body deforming and springing back, and damping decides how much of that survives. Lower damping, more bounce.</p>
+
+<h3>Sleeping</h3>
+<div class="two">
+<div>
+<p>A body remembers where its nodes were. As long as they stay, on average, within <code>sleepDistance</code> (1 cm) of there, the body is going nowhere, however much it trembles. After <code>sleepTime</code> (0.5 s) of that it falls <b>asleep</b>: the solver treats it as a static body, which costs almost nothing.</p>
+<p>A body that does get further "went somewhere". It remembers the new place, starts counting again, and <b>wakes every sleeper</b> whose box touches the box of where it was, where it is, and where it is heading. So whatever is about to hit a sleeping body wakes it, and so does a support that leaves.</p>
+</div>
+<figure style="margin-top:0">
+<svg viewBox="0 0 310 170" width="310">
+  <rect x="8" y="140" width="294" height="10" fill="#dfe4ec"/>
+  <rect x="190" y="60" width="80" height="80" rx="4" fill="#eef0f4" stroke="#8b94a5" stroke-width="1.5"/>
+  <text x="230" y="98" text-anchor="middle" class="s">asleep</text><text x="230" y="112" text-anchor="middle" class="s">z z z</text>
+  <rect x="180" y="50" width="100" height="100" fill="none" stroke="#8b94a5" stroke-dasharray="3 3"/>
+  <circle cx="52" cy="104" r="26" fill="none" stroke="#9fb6de" stroke-dasharray="3 3"/>
+  <circle cx="104" cy="106" r="26" fill="#e6eefc" stroke="#2f6fdb" stroke-width="1.5"/>
+  <circle cx="156" cy="108" r="26" fill="none" stroke="#9fb6de" stroke-dasharray="3 3"/>
+  <rect x="24" y="76" width="160" height="60" fill="none" stroke="#2f6fdb" stroke-dasharray="5 3"/>
+  <text x="26" y="68" style="fill:#2f6fdb">box of: was, is, heading</text>
+  <text x="182" y="42" class="s">overlap: wake up</text>
+</svg>
+<figcaption>The moving ball's box reaches the sleeper's box one frame before they touch.</figcaption>
+</figure>
+</div>
+<p>Sleeping is also the cure for the twitching of soft bodies trapped under heavy ones. That twitch is not a vibration. The body is squeezed between two things that both push, and every substep the contact solve shuffles its nodes a few millimetres. I measured three damping schemes against it and none helped, because it is positions being shuffled, not velocities. A body that is going nowhere falls asleep and the shuffle stops completely. In your scene with damping 0.1, 38 of 39 moving bodies were asleep after about 10 seconds and the step cost 0.85 ms.</p>
+
+<h3>The step-time limit</h3>
+<p>With <code>maxStepMs</code> set, a step that would take longer protects the frame in two stages:</p>
+<figure>
+<svg viewBox="0 0 690 118" width="690">
+  <text x="4" y="12" class="bold">normal step</text>
+  <g><rect x="110" y="2" width="70" height="16" fill="#e6eefc" stroke="#2f6fdb"/><rect x="180" y="2" width="70" height="16" fill="#e6eefc" stroke="#2f6fdb"/><rect x="250" y="2" width="70" height="16" fill="#e6eefc" stroke="#2f6fdb"/><rect x="320" y="2" width="70" height="16" fill="#e6eefc" stroke="#2f6fdb"/></g>
+  <text x="4" y="46" class="bold">1: hurry</text>
+  <g><rect x="110" y="36" width="170" height="16" fill="#e6eefc" stroke="#2f6fdb"/><rect x="280" y="36" width="95" height="16" fill="#fbe9da" stroke="#e0803a"/><rect x="375" y="36" width="95" height="16" fill="#fbe9da" stroke="#e0803a"/><rect x="470" y="36" width="95" height="16" fill="#fbe9da" stroke="#e0803a"/></g>
+  <text x="4" y="80" class="bold">2: slow motion</text>
+  <g><rect x="110" y="70" width="170" height="16" fill="#e6eefc" stroke="#2f6fdb"/><rect x="280" y="70" width="95" height="16" fill="#fbe9da" stroke="#e0803a"/><rect x="375" y="70" width="95" height="16" fill="#fbe9da" stroke="#e0803a"/><rect x="470" y="70" width="95" height="16" fill="none" stroke="#9aa3b2" stroke-dasharray="3 3"/></g>
+  <text x="484" y="82" class="s">not done</text>
+  <path d="M480,0 V96" stroke="#cf4b4b" stroke-width="1.5"/><text x="486" y="12" style="fill:#cf4b4b">maxStepMs</text>
+  <text x="110" y="110" class="s">blue: full substep.  orange: a substep in a hurry (1 sweep, limit step stops and freezes at once).</text>
+</svg>
+</figure>
+<ol>
+  <li><b>Hurry.</b> A substep that takes more than its share makes the next ones save time on contacts: one sweep, and the limit step stops and freezes at once instead of sliding first. Nothing gets through either way, but hard-squeezed bodies stick together while it lasts. This is aimed at where the time actually goes: in crush scenes the limit step alone was up to 29 of 45 ms.</li>
+  <li><b>Slow motion.</b> If the next substep would not fit, the step ends early. The substeps that were done are as long and as careful as always, so the simulation simply advances less than a full frame. One substep is always done.</li>
+</ol>
+<p>With a 6 ms limit the worst steps of the three crush tests went from 23, 45 and 15 ms to about 6 ms, at roughly 90% speed.</p>
+
+<h3>Repeatable</h3>
+<p>A limit that reads the real clock makes every run different, because the clock never says the same thing twice. With <code>repeatable</code> on (the default), the limit instead <b>counts the work</b> a substep did: its cells, pairs, contacts and cuts, each times a cost measured once on your machine. The same work gives the same number, so two runs are identical to the last digit. The estimate matched real times within about 10% on average. The trade: on a slower machine the frame takes longer instead of the simulation slowing more, because nothing looks at the clock. Turn it off to have the limit follow the real frame time exactly.</p>
+
+<h2>9. Compared with the previous engine</h2>
+
+<p>"Previous engine" is <code>1_PhysicsSolver</code>, which still works and was not touched. Both engines use a lattice of cells with the mesh glued in, 5 tetrahedra per cell and 8 colours, so the starting idea is yours. What changed is nearly everything built on it.</p>
+
+<table>
+<tr><th style="width:17%"></th><th style="width:34%">Previous engine</th><th>SoftEngine</th></tr>
+<tr><td>Substeps</td><td>10</td><td>4</td></tr>
+<tr><td>Elastic constraints</td><td><code>|F| - sqrt(3)</code> and <code>J - 1</code>: both measure volume near rest, little shear stiffness</td><td><code>sqrt(I + J*J - 4J)</code> and <code>J - 1</code>, solved together: real shear and volume stiffness, values mean what they say</td></tr>
+<tr><td>What collides</td><td>The collision triangles and vertices of whole lattice cells, one normal and gap per pair of cells</td><td>Convex pieces as a few hull points each. No triangles at runtime</td></tr>
+<tr><td>Broad phase</td><td>Uniform grid of swept cell boxes, rebuilt every substep</td><td>Boxes inside boxes (body, chunk, piece), kept for as long as it stays valid, searched per body in parallel</td></tr>
+<tr><td>Skipping far pairs</td><td>Every candidate pair goes to the narrow phase</td><td>One subtraction per pair (travel budget)</td></tr>
+<tr><td>Contact solve</td><td>Three stages, each a single-threaded loop: velocity contacts, slide, position limit</td><td>Position pushes, one body per core; then a small single-threaded limit step that usually has nothing to do</td></tr>
+<tr><td>Guarantee</td><td>At least skin / 2 between the collision meshes of candidate pairs</td><td>The same promise (12.5 mm), checked on hull points in double precision against a plane fixed at the start of the substep</td></tr>
+<tr><td>Rest, damping</td><td>One global damping value</td><td>Per-body damping that does not slow falling or spinning; sleeping</td></tr>
+<tr><td>Frame protection</td><td>None</td><td>Step-time limit with hurry and slow motion, optionally repeatable</td></tr>
+<tr><td>Drawing</td><td>Every physics step</td><td>Blended between physics steps; sleeping meshes not re-uploaded</td></tr>
+<tr><td>Testing</td><td>Play mode</td><td>Headless test runner with 18 scenarios and an independent checker that measures real triangle distances and crossings</td></tr>
+</table>
+
+<h3>Speed</h3>
+<table>
+<tr><th>Scene</th><th class="n">Previous engine</th><th class="n">SoftEngine</th><th>Notes</th></tr>
+<tr><td>Pile (27 mixed bodies)</td><td class="n">62 ms avg, 178 worst</td><td class="n">4.1 ms avg, 9 worst</td><td>about 15 times faster</td></tr>
+<tr><td>Tower (heavy cylinder on 4 soft balls)</td><td class="n">121 ms avg, 598 worst</td><td class="n">3.6 ms avg, 23 worst*</td><td>6 ms worst with the limit on</td></tr>
+<tr><td>Stack of 3 cubes</td><td class="n">17 ms</td><td class="n">1.2 ms, then 0.2 asleep*</td><td></td></tr>
+<tr><td>One cube at rest</td><td class="n">13.5 ms</td><td class="n">0.4 ms awake*</td><td></td></tr>
+</table>
+<p class="small">Per physics step. The previous engine was measured on 13 and 14 November in Play mode in the Editor; SoftEngine headless in the Editor. The pile figure is with Burst safety checks on; figures marked * are with safety checks off, which roughly halves times, so compare those loosely. The size of the gap is not in doubt, the exact ratio is.</p>
+
+<h3>Within SoftEngine: the collision rounds</h3>
+<table>
+<tr><th>Version</th><th class="n">Pile, collision part</th><th>What changed</th></tr>
+<tr><td>First version (13 Nov)</td><td class="n">about 5 ms</td><td>Triangles at runtime, contacts for everything near</td></tr>
+<tr><td>Hull points (15 Nov)</td><td class="n">1.67 ms</td><td>Hull points only, three-level broad phase, kept pair list, new elastic constraints</td></tr>
+<tr><td>Parallel (16 Nov)</td><td class="n">0.89 ms</td><td>Contact solve per body, parallel broad phase, travel budget, slide cuts, 3 sweeps</td></tr>
+</table>
+<p>In your own scene (the 24-body version) collision went from 3.1 to 1.43 ms in the last round, against 1.26 ms for the elastic solve, so collision now costs about the same as elasticity. That was the goal you set.</p>
+
+<h2>10. What was tried and dropped</h2>
+<p>Most of the design is what was left after something simpler failed. These are worth knowing so nobody tries them again without a new idea.</p>
+<table>
+<tr><th style="width:36%">Tried</th><th>Why it was dropped</th></tr>
+<tr><td>Hashed grid broad phase</td><td>0.7 ms per rebuild on the pile: 17,000 bucket lookups for 2,500 pairs. Boxes inside boxes are several times cheaper for bodies that are mostly not touching.</td></tr>
+<tr><td>Rebuilding the pair list only for pieces that left their box</td><td>Pieces leave one by one, so the fixed cost was paid every substep. Worse than full rebuilds.</td></tr>
+<tr><td>Signed distance fields</td><td>Point samples against a distance field cannot promise zero penetration with a 12.5 mm skin, and the field of a deformed cell is not its rest field.</td></tr>
+<tr><td>Hull points picked per cell</td><td>Under a hard crush vertices popped out of the hull. Real distance fell to 3 mm.</td></tr>
+<tr><td>Clamping how far a contact may push</td><td>Brakes heavy fast bodies and permanently scrambled the 140 m/s ball.</td></tr>
+<tr><td>A per-body margin from closing speed</td><td>A soft body's own deformation counts as "closing". Contact counts exploded: tower at 11 ms, 47,000 contacts per step.</td></tr>
+<tr><td>Firm contacts that push single hull points</td><td>Each side acting alone added energy (a cube bounced to 11 m). Firm contacts must move the whole cell.</td></tr>
+<tr><td>Giving back over-pushes in the parallel solve</td><td>Works in a single loop. With two bodies doing it at once the result depended on whether the sweep count was odd or even, and a stack buzzed at up to 1 m/s.</td></tr>
+<tr><td>Friction that removes "its share of the current slide" per contact</td><td>Contacts share nodes, so each body ended up removing the whole slide. The slide reversed every substep and grew.</td></tr>
+<tr><td>Damping inside the elastic constraints</td><td>With one pass per substep it softens stiff bodies: a ball rested 10 cm lower. Solving the damper separately exploded.</td></tr>
+<tr><td>Damping per cell</td><td>Only smooths velocity between neighbours. A bounce, which is the whole body deforming, was untouched.</td></tr>
+<tr><td>Fewer, larger jobs</td><td>No gain. The time is real work, not scheduling.</td></tr>
+</table>
+
+<h2>11. Settings and tuning</h2>
+
+<h3>SoftBody (per object)</h3>
+<table>
+<tr><th style="width:22%">Field</th><th class="n" style="width:12%">Default</th><th>Meaning</th></tr>
+<tr><td>Mass</td><td class="n">1</td><td>Kilograms, spread over the lattice nodes.</td></tr>
+<tr><td>Youngs Modulus</td><td class="n">100000</td><td>Stiffness in pascal. 67 is a very soft jelly, 1e5 rubber-like, 1e6 and up firm.</td></tr>
+<tr><td>Poisson Ratio</td><td class="n">0.4</td><td>How strongly it keeps its volume: 0.49 nearly incompressible, 0 not at all.</td></tr>
+<tr><td>Friction</td><td class="n">0.5</td><td>Two bodies use the root of the product of theirs.</td></tr>
+<tr><td>Damping</td><td class="n">0.1</td><td>Seconds until most of a wobble is gone. 0 never, 0.5 jelly, 0.05 settles at once. Lower is bouncier.</td></tr>
+<tr><td>Is Static</td><td class="n">off</td><td>Never moves; other bodies collide with it like with any body.</td></tr>
+<tr><td>Start Velocity</td><td class="n">0</td><td></td></tr>
+</table>
+
+<h3>SoftWorld (one per scene)</h3>
+<table>
+<tr><th style="width:22%">Field</th><th class="n" style="width:12%">Default</th><th>Meaning, and when to touch it</th></tr>
+<tr><td>Smooth</td><td class="n">on</td><td>Draw bodies between two physics steps.</td></tr>
+<tr><td>Cell Size</td><td class="n">0.25</td><td>Lattice cell edge. Smaller: more detail, cost grows with the cube. Fixed once bodies exist.</td></tr>
+<tr><td>Substeps</td><td class="n">4</td><td>More: stiffer and more accurate, cost grows in proportion.</td></tr>
+<tr><td>Max Step Ms</td><td class="n">0</td><td>Step-time limit, 0 = off. 6 to 16 are sensible.</td></tr>
+<tr><td>Repeatable</td><td class="n">on</td><td>The limit counts work instead of reading the clock.</td></tr>
+<tr><td>Gravity</td><td class="n">0, -9.81, 0</td><td></td></tr>
+<tr><td>Damping</td><td class="n">0</td><td>Global: velocity lost per second by everything, falling included. Usually leave at 0 and use the per-body one.</td></tr>
+<tr><td>Max Stretch</td><td class="n">2</td><td>No cell edge gets longer than this many times its rest length. 0 = no limit.</td></tr>
+<tr><td>Skin</td><td class="n">0.025</td><td>Contacts keep surfaces this far apart. Bodies visibly rest this far from each other.</td></tr>
+<tr><td>Hard Skin</td><td class="n">0.0125</td><td>The limit step never lets them get closer. Keep at half of Skin.</td></tr>
+<tr><td>Contact Sweeps</td><td class="n">3</td><td>Passes of the contact solve. More is not calmer; 3 was as calm as 6 and cheaper.</td></tr>
+<tr><td>Push Out Speed</td><td class="n">0.2</td><td>How fast surfaces closer than Skin are moved apart, m/s.</td></tr>
+<tr><td>Region Margin</td><td class="n">0.025</td><td>How far contacts are expected to push a node off course. Leave it; smaller and larger were both slower.</td></tr>
+<tr><td>Self Collision</td><td class="n">off</td><td>A body's own non-neighbouring cells collide. Barely tested.</td></tr>
+<tr><td>Sleep Time</td><td class="n">0.5</td><td>Seconds of going nowhere before a body sleeps. 0 = never sleep.</td></tr>
+<tr><td>Sleep Distance</td><td class="n">0.01</td><td>"Nowhere": nodes on average within this of where they were.</td></tr>
+<tr><td>Has Floor, Floor Y, Floor Friction</td><td class="n">on, 0, 0.5</td><td>The built-in floor plane.</td></tr>
+</table>
+
+<h3>If something looks wrong</h3>
+<table>
+<tr><th style="width:36%">What you see</th><th>What to try</th></tr>
+<tr><td>A body keeps wobbling or twitching and never sleeps</td><td>Raise its Damping (0.1 to 0.2). Bodies saved before damping existed have 0.</td></tr>
+<tr><td>Bodies are too bouncy / not bouncy enough</td><td>Damping up / down. Stiffness also matters: stiffer bounces sharper.</td></tr>
+<tr><td>A stiff body feels soft</td><td>More substeps, or more mass. See the note in section 4.</td></tr>
+<tr><td>Long frames in heavy moments</td><td>Set Max Step Ms.</td></tr>
+<tr><td>Everything is twice as slow in the Editor as expected</td><td>Jobs &gt; Burst &gt; Safety Checks is on. Or Unity is in the background: macOS then throttles it several times over.</td></tr>
+<tr><td>Bodies hover visibly apart</td><td>That is Skin. Halving Skin and Hard Skin halves the gap but leaves less room for fast contacts.</td></tr>
+</table>
+
+<h2>12. Known limits</h2>
+<ul>
+  <li><b>Play mode was verified by you, not by me.</b> Everything was developed against the headless test runner. The drawing code in <code>SoftWorld</code> in particular has only ever run on your side.</li>
+  <li><b>Momentum is not exactly conserved</b> between two moving bodies (about 8% lost in the head-on test). Energy is never gained.</li>
+  <li><b>No separate restitution or static friction.</b> Bounce is damping and stiffness; friction is one number.</li>
+  <li><b>Soft bodies pinched under heavy ones tremble until they sleep.</b> Sleeping hides it; the cause (the contact solve shuffling a body that has nowhere to go) is still there.</li>
+  <li><b>A body crushed far beyond what it can bear can stay tangled.</b> The test is a 1000 kg cube at 80 m/s onto a 2 kg ball.</li>
+  <li><b>Bodies created overlapping stay overlapping.</b> Planes between convex pieces can keep things apart, they cannot untangle them.</li>
+  <li><b>One very heavy substep can still exceed Max Step Ms</b>, since one substep is always done.</li>
+  <li><b>The narrow phase is the largest remaining collision cost</b> (0.44 of 1.43 ms): the distance search runs every substep for every pair within about 6 cm. Reusing a plane for the substeps of one frame would keep the guarantee and is the next thing to try.</li>
+  <li><b>Sleeping bodies still have their hull points recomputed</b> every substep. Skipping that would bring a fully sleeping scene well under the 0.85 ms measured.</li>
+  <li><b>Not built:</b> collision with Unity colliders and rigidbodies, removing a body at runtime, forces, grabbing, raycasts, collision events, and a standalone build. You chose to leave these for later.</li>
+</ul>
+
+</body>
+</html>
